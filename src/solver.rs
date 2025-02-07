@@ -1,6 +1,7 @@
 use crate::data::Clause;
 use crate::utils::*;
 use crate::{apply_to_clauses, apply_to_slices};
+use rand::prelude::*;
 use std::cmp::Reverse;
 use std::usize;
 
@@ -19,7 +20,7 @@ fn remove_pure_literals(clauses: &mut Vec<Clause>) {
     }
     let mut acc = clauses[0].clone();
     for i in 1..clauses.len() {
-        acc.zip_clause_in(&clauses[i], |x, y| *x |= y);
+        acc.unsafe_zip_clause_in(&clauses[i], |x, y| *x |= y);
     }
     let pure_literals = acc.difference_switched_self();
     clauses.retain(|x| pure_literals.disjoint(x));
@@ -70,7 +71,7 @@ fn remove_rarest_literal(clauses: &mut Vec<Clause>) -> bool {
 
         for i in to_modify {
             clauses[i].unset(-literal);
-            clauses[i].zip_clause_in(&c, |x, y| *x |= y);
+            clauses[i].unsafe_zip_clause_in(&c, |x, y| *x |= y);
             fix_clause(clauses, i);
         }
     }
@@ -102,8 +103,8 @@ fn remove_rarest_literal(clauses: &mut Vec<Clause>) -> bool {
             .unwrap();
 
         for i in 0..2 {
-            clauses[i].zip_clause_in(&copies[i + 1], |x, y| *x |= y);
-            clauses[i + 1].zip_clause_in(&copies[i ^ 1], |x, y| *x |= y);
+            clauses[i].unsafe_zip_clause_in(&copies[i + 1], |x, y| *x |= y);
+            clauses[i + 1].unsafe_zip_clause_in(&copies[i ^ 1], |x, y| *x |= y);
         }
 
         a.sort_by_key(|x| Reverse(*x));
@@ -159,9 +160,9 @@ fn subjugate(clauses: &mut Vec<Clause>, k: usize) {
     let mut i = k + 1;
     while i < clauses.len() {
         let other = &mut clauses[i];
-        let difference = current.difference(other);
-        if difference.count_ones() == 1 {
-            let badness = difference.iter_literals().next().unwrap();
+        let difference: Vec<isize> = current.unsafe_iter_differences(other).take(2).collect();
+        if difference.len() == 1 {
+            let badness = difference[0];
             other.unset(-badness);
             let j = clauses.descent(i);
             if j < k {
@@ -190,11 +191,11 @@ fn components(mut clauses: Vec<Clause>) -> Vec<Vec<Clause>> {
         r = x.variables();
         w = vec![x];
         loop {
-            e = clauses.extract(|x| !x.has_variables(&r));
+            e = clauses.extract(|x| !x.unsafe_has_variables(&r));
             if e.is_empty() {
                 break;
             }
-            e.iter().for_each(|x| x.enrich_variables(&mut r));
+            e.iter().for_each(|x| x.unsafe_enrich_variables(&mut r));
             w.extend(e);
         }
         w.sort();
@@ -224,88 +225,96 @@ fn kernelize(clauses: &mut Vec<Clause>) {
     }
 }
 
+//  fn choice(clauses: &Vec<Clause>) -> Option<isize> {
+//      clauses[0].iter_literals().next()
+//  }
+
 fn choice(clauses: &Vec<Clause>) -> Option<isize> {
-    clauses[0].iter_literals().next()
+    let literals: Vec<isize> = clauses[0].iter_literals().collect();
+    literals.choose(&mut rand::rng()).copied()
 }
 
-fn guess(mut clauses: Vec<Clause>) -> bool {
-    kernelize(&mut clauses);
+//    fn guess(mut clauses: Vec<Clause>) -> bool {
+//        kernelize(&mut clauses);
+//        if clauses.is_empty() {
+//            return true;
+//        }
+//        let comps = components(clauses);
+
+//        for mut c in comps {
+//            let v = choice(&c);
+//            match v {
+//                None => return false,
+//                Some(x) => {
+//                    let mut d = c.clone();
+//                    resolve(x, &mut c);
+//                    if guess(c) {
+//                        continue;
+//                    }
+//                    resolve(-x, &mut d);
+//                    if !guess(d) {
+//                        return false;
+//                    }
+//                }
+//            }
+//        }
+//        true
+//    }
+
+//    pub fn solve_problem(mut clauses: Vec<Clause>) -> bool {
+//        prepare(&mut clauses);
+//        guess(clauses)
+//    }
+
+fn guess(clauses: Vec<Clause>, conflicts: Clause) -> Option<Clause> {
     if clauses.is_empty() {
-        return true;
+        return None;
+    }
+    if clauses[0].is_null() {
+        return Some(conflicts);
     }
     let comps = components(clauses);
-
     for mut c in comps {
-        let v = choice(&c);
-        match v {
-            None => return false,
+        match choice(&c) {
+            None => return Some(conflicts),
             Some(x) => {
-                let mut d = c.clone();
                 resolve(x, &mut c);
-                if guess(c) {
-                    continue;
-                }
-                resolve(-x, &mut d);
-                if !guess(d) {
-                    return false;
+                kernelize(&mut c);
+
+                let mut cloned_conflicts = conflicts.clone();
+                cloned_conflicts.set(-x);
+
+                match guess(c, cloned_conflicts) {
+                    Some(x) => return Some(x),
+                    None => (),
                 }
             }
         }
     }
-    true
+    None
 }
 
 pub fn solve_problem(mut clauses: Vec<Clause>) -> bool {
+    if clauses.len() == 0 {
+        return true;
+    };
+    let len = clauses[0].content_length();
     prepare(&mut clauses);
-    guess(clauses)
+    loop {
+        kernelize(&mut clauses);
+        let conflicts = guess(clauses.clone(), Clause::new_blocks(len));
+        match conflicts {
+            None => return true,
+            Some(x) => {
+                if x.is_null() {
+                    return false;
+                }
+                clauses.push(x);
+                clauses.descent(clauses.len() - 1);
+            }
+        }
+    }
 }
-
-//  fn guess(clauses: Vec<Clause>, conflicts: Clause) -> Option<Clause> {
-//      if clauses.is_empty() {
-//          return None;
-//      }
-//      if clauses[0].is_null() {
-//          return Some(conflicts);
-//      }
-//      let comps = components(clauses);
-//      for mut c in comps {
-//          match choice(&c) {
-//              None => return Some(conflicts),
-//              Some(x) => {
-//                  resolve(x, &mut c);
-//                  kernelize(&mut c);
-
-//                  let mut cloned_conflicts = conflicts.clone();
-//                  cloned_conflicts.set(-x);
-
-//                  match guess(c, cloned_conflicts) {
-//                      Some(x) => return Some(x),
-//                      None => (),
-//                  }
-//              }
-//          }
-//      }
-//      None
-//  }
-
-//  pub fn solve_problem(clauses: &mut Vec<Clause>, len: usize) -> bool {
-//      prepare(clauses);
-//      loop {
-//          kernelize(clauses);
-//          combine(clauses);
-//          let conflicts = guess(clauses.to_vec(), Clause::new(len));
-//          match conflicts {
-//              None => return true,
-//              Some(x) => {
-//                  if x.is_null() {
-//                      return false;
-//                  }
-//                  clauses.push(x);
-//                  clauses.descent(clauses.len() - 1);
-//              }
-//          }
-//      }
-//  }
 
 //  fn prints(clauses: &Vec<Clause>) {
 //      println!("Sorted? {}", clauses.iter().skip(1).zip(clauses).all(|(x,y)| y <= x));

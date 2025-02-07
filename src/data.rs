@@ -46,13 +46,6 @@ impl Clause {
         self.pos.count_ones() + self.neg.count_ones()
     }
 
-    pub fn content_pos(&self) -> &[usize] {
-        &self.pos.content
-    }
-    pub fn content_neg(&self) -> &[usize] {
-        &self.neg.content
-    }
-
     pub fn content_pos_mut(&mut self) -> &mut [usize] {
         &mut self.pos.content
     }
@@ -60,22 +53,16 @@ impl Clause {
         &mut self.neg.content
     }
 
-    pub fn zip_clause_in<F>(&mut self, rhs: &Self, f: F)
+    pub fn unsafe_zip_clause_in<F>(&mut self, rhs: &Self, f: F)
     where
         F: Fn(&mut usize, usize) -> (),
     {
-        self.pos.zip_bits_in(&rhs.pos, &f);
-        self.neg.zip_bits_in(&rhs.neg, f);
+        self.pos.unsafe_zip_bits_in(&rhs.pos, &f);
+        self.neg.unsafe_zip_bits_in(&rhs.neg, f);
     }
 
     pub fn subset_of(&self, rhs: &Self) -> bool {
         self.pos.subset_of(&rhs.pos) && self.neg.subset_of(&rhs.neg)
-    }
-
-    pub fn difference(&self, rhs: &Self) -> Self {
-        let pos = self.pos.difference(&rhs.pos);
-        let neg = self.neg.difference(&rhs.neg);
-        Self { pos, neg }
     }
 
     pub fn difference_switched_self(&self) -> Self {
@@ -111,14 +98,14 @@ impl Clause {
         self.pos.zip_bits(&self.neg, |x, y| x | y)
     }
 
-    pub fn enrich_variables(&self, vrs: &mut BitVec) {
-        for i in 0..usize::min(vrs.content.len(), self.pos.content.len()) {
+    pub fn unsafe_enrich_variables(&self, vrs: &mut BitVec) {
+        for i in 0..vrs.content.len() {
             vrs.content[i] |= self.pos.content[i] | self.neg.content[i];
         }
     }
 
-    pub fn has_variables(&self, vrs: &BitVec) -> bool {
-        for i in 0..usize::min(self.content_length(), vrs.content.len()) {
+    pub fn unsafe_has_variables(&self, vrs: &BitVec) -> bool {
+        for i in 0..vrs.content.len() {
             if 0 != (self.pos.content[i] | self.neg.content[i]) & vrs.content[i] {
                 return true;
             }
@@ -126,8 +113,8 @@ impl Clause {
         false
     }
 
-    pub fn related(&self, rhs: &Self) -> bool {
-        for i in 0..usize::min(self.content_length(), rhs.content_length()) {
+    pub fn unsafe_related(&self, rhs: &Self) -> bool {
+        for i in 0..self.content_length() {
             if 0 != (self.pos.content[i] | self.neg.content[i])
                 & (rhs.pos.content[i] | rhs.neg.content[i])
             {
@@ -183,13 +170,18 @@ impl Clause {
             .map(|x| x as isize + 1)
             .chain(self.neg.iter_ones().map(|x| -(1 + x as isize)))
     }
-
-    pub fn iter_pos_literals(&self) -> IterOnes<'_> {
-        self.pos.iter_ones()
-    }
-
-    pub fn iter_neg_literals(&self) -> IterOnes<'_> {
-        self.neg.iter_ones()
+    pub fn unsafe_iter_differences<'b>(
+        &self,
+        rhs: &'b Self,
+    ) -> impl Iterator<Item = isize> + use<'_, 'b> {
+        self.pos
+            .unsafe_iter_bin_op(&rhs.pos)
+            .map(|x| x as isize + 1)
+            .chain(
+                self.neg
+                    .unsafe_iter_bin_op(&rhs.neg)
+                    .map(|x| -(1 + x as isize)),
+            )
     }
 
     pub fn is_null(&self) -> bool {
@@ -213,6 +205,39 @@ impl Ord for Clause {
 pub struct Clause {
     pos: BitVec,
     neg: BitVec,
+}
+
+impl<F> FusedIterator for BinOpIterOnes<'_, '_, F> where F: Fn(usize, usize) -> usize {}
+
+impl<F> Iterator for BinOpIterOnes<'_, '_, F>
+where
+    F: Fn(usize, usize) -> usize,
+{
+    type Item = usize;
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.idx < self.op1.len() && self.num == 0 {
+            self.num = (self.f)(self.op1[self.idx], self.op2[self.idx]);
+            self.idx += 1;
+        }
+
+        if self.num != 0 {
+            let res = self.num.trailing_zeros() as usize + (self.idx - 1) * BLOCK_SIZE;
+            self.num &= self.num - 1;
+            return Some(res);
+        }
+        None
+    }
+}
+
+struct BinOpIterOnes<'a, 'b, F>
+where
+    F: Fn(usize, usize) -> usize,
+{
+    f: F,
+    num: usize,
+    idx: usize,
+    op1: &'a [usize],
+    op2: &'b [usize],
 }
 
 impl FusedIterator for IterOnes<'_> {}
@@ -242,7 +267,7 @@ impl Iterator for IterOnes<'_> {
     }
 }
 
-pub struct IterOnes<'a> {
+struct IterOnes<'a> {
     num: usize,
     idx: usize,
     vls: &'a [usize],
@@ -255,6 +280,19 @@ impl BitVec {
 
     fn count_ones(&self) -> u32 {
         self.content.iter().fold(0, |acc, x| acc + x.count_ones())
+    }
+
+    fn unsafe_iter_bin_op<'b>(
+        &self,
+        rhs: &'b Self,
+    ) -> BinOpIterOnes<'_, 'b, fn(usize, usize) -> usize> {
+        BinOpIterOnes {
+            f: |x, y| x & !y,
+            num: 0,
+            idx: 0,
+            op1: &self.content,
+            op2: &rhs.content,
+        }
     }
 
     fn iter_ones(&self) -> IterOnes<'_> {
@@ -278,11 +316,11 @@ impl BitVec {
         Self { content }
     }
 
-    fn zip_bits_in<F>(&mut self, rhs: &Self, f: F)
+    fn unsafe_zip_bits_in<F>(&mut self, rhs: &Self, f: F)
     where
         F: Fn(&mut usize, usize) -> (),
     {
-        for i in 0..usize::min(self.content.len(), rhs.content.len()) {
+        for i in 0..self.content.len() {
             f(&mut self.content[i], rhs.content[i]);
         }
     }
