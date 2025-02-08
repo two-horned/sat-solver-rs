@@ -1,3 +1,5 @@
+use core::ptr;
+
 impl<T> Extract<T> for Vec<T> {
     fn extract<F>(&mut self, f: F) -> Self
     where
@@ -15,7 +17,7 @@ impl<T> Extract<T> for Vec<T> {
                     deleted += 1;
                 } else {
                     let dst = self.as_mut_ptr().add(i - deleted);
-                    std::ptr::copy(src, dst, 1);
+                    ptr::copy(src, dst, 1);
                 }
             }
             self.set_len(len - deleted);
@@ -43,9 +45,9 @@ impl<T> RetainFrom<T> for Vec<T> {
                 let src = self.as_mut_ptr().add(i);
                 if f(&self[i]) {
                     let dst = self.as_mut_ptr().add(i - deleted);
-                    std::ptr::copy(src, dst, 1);
+                    ptr::copy(src, dst, 1);
                 } else {
-                    std::ptr::drop_in_place(src);
+                    ptr::drop_in_place(src);
                     deleted += 1;
                 }
             }
