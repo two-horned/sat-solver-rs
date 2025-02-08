@@ -4,14 +4,23 @@ impl<T> Extract<T> for Vec<T> {
         F: Fn(&T) -> bool,
     {
         let mut deleted = 0;
-        for i in 0..self.len() {
-            if f(&self[i]) {
-                self.swap(i - deleted, i);
-            } else {
-                deleted += 1;
+        let mut v = Vec::new();
+        let len = self.len();
+
+        unsafe {
+            for i in 0..len {
+                let src = self.as_mut_ptr().add(i);
+                if f(&self[i]) {
+                    v.push(src.read());
+                    deleted += 1;
+                } else {
+                    let dst = self.as_mut_ptr().add(i - deleted);
+                    std::ptr::copy(src, dst, 1);
+                }
             }
+            self.set_len(len - deleted);
         }
-        self.split_off(self.len() - deleted)
+        v
     }
 }
 
@@ -27,14 +36,21 @@ impl<T> RetainFrom<T> for Vec<T> {
         F: Fn(&T) -> bool,
     {
         let mut deleted = 0;
-        for i in start..self.len() {
-            if f(&self[i]) {
-                self.swap(i - deleted, i);
-            } else {
-                deleted += 1;
+        let len = self.len();
+
+        unsafe {
+            for i in start..len {
+                let src = self.as_mut_ptr().add(i);
+                if f(&self[i]) {
+                    let dst = self.as_mut_ptr().add(i - deleted);
+                    std::ptr::copy(src, dst, 1);
+                } else {
+                    std::ptr::drop_in_place(src);
+                    deleted += 1;
+                }
             }
+            self.set_len(len - deleted);
         }
-        self.truncate(self.len() - deleted);
     }
 }
 
