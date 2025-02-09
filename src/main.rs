@@ -1,5 +1,7 @@
-use sat_solver::data::{Clause, ParseProblemError};
+use sat_solver::alloc::PoolAlloc;
+use sat_solver::data::{blocks_needed, create_clause_blocks, ParseProblemError};
 use sat_solver::solver::solve_problem;
+use std::alloc::Layout;
 use std::{io, time::Instant};
 
 fn parse_numbers(line: &str) -> Result<Vec<isize>, ParseProblemError> {
@@ -43,9 +45,15 @@ fn main() -> io::Result<()> {
     }
 
     if let Some(header) = h {
+        let len = blocks_needed(header.vrs);
+        let layout = unsafe {
+            Layout::from_size_align_unchecked(len * size_of::<usize>(), size_of::<usize>())
+        };
+        //let a = PoolAlloc::from(layout, header.cls * header.vrs).unwrap();
+        let a = PoolAlloc::new();
         let mut problem = Vec::new();
         while problem.len() < header.cls {
-            let mut clause = Clause::new(header.vrs);
+            let mut clause = create_clause_blocks(len, &a);
             for line in io::stdin().lines() {
                 let e = line?;
                 if e.is_empty() {
@@ -76,7 +84,7 @@ fn main() -> io::Result<()> {
 
         let start = Instant::now();
         println!("Solving problem...");
-        println!("Solution is {}", solve_problem(problem));
+        println!("Solution is {}", solve_problem(problem, &a));
         println!("Time spent is {}ms", start.elapsed().as_millis());
         return Ok(println!("Bye."));
     }

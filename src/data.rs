@@ -1,14 +1,8 @@
-use std::iter::{self, FusedIterator};
+use crate::alloc::PoolAlloc;
+use std::iter::FusedIterator;
 use std::{cmp, usize};
 
 const BLOCK_SIZE: usize = usize::BITS as usize;
-
-pub struct Problem {
-    pub vrcount: usize,
-    pub clauses: Vec<Clause>,
-    pub deduced: Clause,
-    pub guessed: Clause,
-}
 
 #[derive(Debug)]
 pub enum ParseProblemError {
@@ -18,30 +12,22 @@ pub enum ParseProblemError {
     NegativeNumber(String),
 }
 
-impl Clause {
-    pub fn new(capacity: usize) -> Self {
-        let len = capacity / BLOCK_SIZE + if capacity % BLOCK_SIZE == 0 { 0 } else { 1 };
-        Self {
-            pos: BitVec {
-                content: iter::repeat_n(0, len).collect(),
-            },
-            neg: BitVec {
-                content: iter::repeat_n(0, len).collect(),
-            },
-        }
-    }
+pub fn blocks_needed(vrs: usize) -> usize {
+    vrs / BLOCK_SIZE + if vrs % BLOCK_SIZE == 0 { 0 } else { 1 }
+}
 
-    pub fn new_blocks(blocks: usize) -> Self {
-        Self {
-            pos: BitVec {
-                content: iter::repeat_n(0, blocks).collect(),
-            },
-            neg: BitVec {
-                content: iter::repeat_n(0, blocks).collect(),
-            },
-        }
+pub fn create_clause_blocks<'a>(blocks: usize, a: &'a PoolAlloc) -> Clause<'a> {
+    Clause {
+        pos: BitVec {
+            content: unsafe { Box::new_zeroed_slice_in(blocks, a).assume_init() },
+        },
+        neg: BitVec {
+            content: unsafe { Box::new_zeroed_slice_in(blocks, a).assume_init() },
+        },
     }
+}
 
+impl Clause<'_> {
     pub fn count_ones(&self) -> u32 {
         self.pos.count_ones() + self.neg.count_ones()
     }
@@ -189,22 +175,22 @@ impl Clause {
     }
 }
 
-impl PartialOrd for Clause {
+impl PartialOrd for Clause<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         self.count_ones().partial_cmp(&other.count_ones())
     }
 }
 
-impl Ord for Clause {
+impl Ord for Clause<'_> {
     fn cmp(&self, other: &Self) -> cmp::Ordering {
         self.count_ones().cmp(&other.count_ones())
     }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Clause {
-    pos: BitVec,
-    neg: BitVec,
+pub struct Clause<'a> {
+    pos: BitVec<'a>,
+    neg: BitVec<'a>,
 }
 
 impl<F> FusedIterator for BinOpIterOnes<'_, '_, F> where F: Fn(usize, usize) -> usize {}
@@ -273,7 +259,7 @@ struct IterOnes<'a> {
     vls: &'a [usize],
 }
 
-impl BitVec {
+impl BitVec<'_> {
     fn is_null(&self) -> bool {
         self.content.iter().all(|&x| x == 0)
     }
@@ -307,13 +293,11 @@ impl BitVec {
     where
         F: Fn(usize, usize) -> usize,
     {
-        let content = self
-            .content
-            .iter()
-            .zip(&rhs.content)
-            .map(|(&x, &y)| f(x, y))
-            .collect();
-        Self { content }
+        let mut res = Self {
+            content: self.content.clone(),
+        };
+        res.unsafe_zip_bits_in(&rhs, |x, y| *x = f(*x, y));
+        res
     }
 
     fn unsafe_zip_bits_in<F>(&mut self, rhs: &Self, f: F)
@@ -371,6 +355,6 @@ impl BitVec {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct BitVec {
-    content: Box<[usize]>,
+pub struct BitVec<'a> {
+    content: Box<[usize], &'a PoolAlloc>,
 }
