@@ -188,8 +188,9 @@ fn components(mut clauses: Vec<Clause>) -> Vec<Vec<Clause>> {
     let mut v = Vec::new();
 
     while let Some(x) = clauses.pop() {
+        let mut w = Vec::with_capacity(clauses.len());
         let mut r = x.variables();
-        let mut w = vec![x.clone()];
+        w.push(x.clone());
         loop {
             let e = clauses.extract(|x| x.unsafe_has_variables(&r));
             if e.is_empty() {

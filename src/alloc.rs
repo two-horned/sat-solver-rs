@@ -4,20 +4,22 @@ use std::ptr::NonNull;
 use std::sync::Mutex;
 
 pub struct PoolAlloc {
-    memory: Mutex<BumpMemory>,
+    objsiz: usize,
+    memory: Mutex<PoolMemory>,
 }
 
-struct BumpMemory {
-    buffer: Vec<u8>, // Pre-allocated memory buffer
-    offset: usize,      // Current allocation offset
+struct PoolMemory {
+    buffr: Box<[u8]>,
+    frees: Vec<usize>,
 }
 
 impl PoolAlloc {
-    pub fn new() -> Self {
+    pub fn new(obj_len: usize, capacity: usize) -> Self {
         Self {
-            memory: Mutex::new(BumpMemory {
-                buffer: Vec::with_capacity(10_000),
-                offset: 0,
+            objsiz: obj_len,
+            memory: Mutex::new(PoolMemory {
+                buffr: iter::repeat_n(0, obj_len * capacity).collect(),
+                frees: (0..capacity).map(|x| obj_len * x).collect(),
             }),
         }
     }
@@ -25,19 +27,24 @@ impl PoolAlloc {
 
 unsafe impl Allocator for PoolAlloc {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        let mut memory = self.memory.lock().unwrap();
-        let start = memory.offset;
-        let end = start + layout.size();
+        if layout.size() != self.objsiz {
+            println!("Wrong size!, {:?} instead {:?}", layout.size(), self.objsiz);
+            return Err(AllocError);
+        }
 
-        if end > memory.buffer.len() {
-            memory.buffer.extend(iter::repeat_n(0, end));
-        } 
-            memory.offset = end;
-            let slice = &mut memory.buffer[start..end];
+        let mut memory = self.memory.lock().unwrap();
+        if let Some(start) = memory.frees.pop() {
+            let slice = &mut memory.buffr[start..start + self.objsiz];
             Ok(NonNull::from(slice))
+        } else {
+            Err(AllocError)
+        }
     }
 
-    unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: Layout) {
-        // No-op: deallocation is unsupported in a bump allocator.
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, _layout: Layout) {
+        let mut memory = self.memory.lock().unwrap();
+        let ptro = NonNull::from(&memory.buffr[0]);
+        let diff = ptr.sub_ptr(ptro);
+        memory.frees.push(diff);
     }
 }

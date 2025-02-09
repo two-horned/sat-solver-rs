@@ -6,7 +6,7 @@ impl<T> Extract<T> for Vec<T> {
         F: Fn(&T) -> bool,
     {
         let mut deleted = 0;
-        let mut v = Vec::new();
+        let mut v = Vec::with_capacity(self.len() / 2);
         let len = self.len();
 
         unsafe {

@@ -1,7 +1,6 @@
 use sat_solver::alloc::PoolAlloc;
 use sat_solver::data::{blocks_needed, create_clause_blocks, ParseProblemError};
 use sat_solver::solver::solve_problem;
-use std::alloc::Layout;
 use std::{io, time::Instant};
 
 fn parse_numbers(line: &str) -> Result<Vec<isize>, ParseProblemError> {
@@ -46,11 +45,8 @@ fn main() -> io::Result<()> {
 
     if let Some(header) = h {
         let len = blocks_needed(header.vrs);
-        let layout = unsafe {
-            Layout::from_size_align_unchecked(len * size_of::<usize>(), size_of::<usize>())
-        };
         //let a = PoolAlloc::from(layout, header.cls * header.vrs).unwrap();
-        let a = PoolAlloc::new();
+        let a = PoolAlloc::new(len * size_of::<usize>(), header.cls * header.vrs);
         let mut problem = Vec::new();
         while problem.len() < header.cls {
             let mut clause = create_clause_blocks(len, &a);
