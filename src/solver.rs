@@ -47,7 +47,7 @@ fn remove_rarest_literal(clauses: &mut Vec<Clause>, a: &PoolAlloc) -> bool {
 
     fn fix_clause(clauses: &mut Vec<Clause>, k: usize) {
         if clauses[k].disjoint_switched_self() {
-            clauses.ascent(k);
+            clauses.ascend(k);
         } else {
             clauses.remove(k);
         }
@@ -92,11 +92,13 @@ fn remove_rarest_literal(clauses: &mut Vec<Clause>, a: &PoolAlloc) -> bool {
             clauses[i + 2].unset(-literal);
         }
 
-        let copies: [Clause; 4] = (0..4)
-            .map(|i| clauses[a[i]].clone())
-            .collect::<Vec<Clause>>()
-            .try_into()
-            .unwrap();
+        let copies: [Clause; 4] = {
+            let u = clauses[a[0]].clone();
+            let v = clauses[a[1]].clone();
+            let w = clauses[a[2]].clone();
+            let x = clauses[a[3]].clone();
+            [u,v,w,x]
+        };
 
         for i in 0..2 {
             clauses[i].unsafe_zip_clause_in(&copies[i + 1], |x, y| *x |= y);
@@ -145,7 +147,7 @@ fn resolve(literal: isize, clauses: &mut Vec<Clause>) {
         let x = &mut clauses[i];
         if x.read(-literal) {
             x.unset(-literal);
-            clauses.descent(i);
+            clauses.descend(i);
         }
     }
 }
@@ -159,14 +161,16 @@ fn subjugate(clauses: &mut Vec<Clause>, k: usize) {
     let mut i = k + 1;
     while i < clauses.len() {
         let other = &mut clauses[i];
-        let difference: Vec<isize> = current.unsafe_iter_differences(other).take(2).collect();
-        if difference.len() == 1 {
-            let badness = difference[0];
+        let (badness, control) = {
+            let mut difference = current.unsafe_iter_differences(other).take(2);
+            (difference.next(), difference.next())
+        };
+
+        if badness.is_some() && control.is_none() {
+            let badness = badness.unwrap();
             other.unset(-badness);
-            let j = clauses.descent(i);
-            if j < k {
-                subjugate(clauses, j);
-            }
+            let j = clauses.descend(i);
+            if j < k { subjugate(clauses, j); }
         }
         i += 1
     }

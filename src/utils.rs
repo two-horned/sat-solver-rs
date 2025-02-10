@@ -1,5 +1,5 @@
-use core::ptr;
-use std::alloc::Allocator;
+use core::ptr::{copy, drop_in_place};
+use core::alloc::Allocator;
 
 impl<T, A: Allocator> ExtractIn<T> for Vec<T, A> {
     fn extract_in<F>(&mut self, other: &mut Self, f: F)
@@ -17,7 +17,7 @@ impl<T, A: Allocator> ExtractIn<T> for Vec<T, A> {
                     deleted += 1;
                 } else {
                     let dst = self.as_mut_ptr().add(i - deleted);
-                    ptr::copy(src, dst, 1);
+                    copy(src, dst, 1);
                 }
             }
             self.set_len(len - deleted);
@@ -44,9 +44,9 @@ impl<T, A: Allocator> RetainFrom<T> for Vec<T, A> {
                 let src = self.as_mut_ptr().add(i);
                 if f(&self[i]) {
                     let dst = self.as_mut_ptr().add(i - deleted);
-                    ptr::copy(src, dst, 1);
+                    copy(src, dst, 1);
                 } else {
-                    ptr::drop_in_place(src);
+                    drop_in_place(src);
                     deleted += 1;
                 }
             }
@@ -61,38 +61,63 @@ pub trait RetainFrom<T> {
         F: Fn(&T) -> bool;
 }
 
-impl<T, A> Ascend for Vec<T, A>
+impl<T: PartialOrd> BinSearchInsert<T> for [T] {
+    fn binary_search_for_insert(&self, item: &T) -> usize {
+        let mut inner = 0;
+        let mut outer = self.len();
+
+        while inner != outer {
+            let middle = inner + (outer - inner) / 2;
+            if self[middle] < *item {
+                inner = middle + 1;
+            } else {
+                outer = middle;
+            }
+        }
+        inner
+    }
+}
+
+trait BinSearchInsert<T: PartialOrd> {
+    fn binary_search_for_insert(&self, item: &T) -> usize;
+}
+
+impl<T, A> Ascent for Vec<T, A>
 where
     A: Allocator,
     T: PartialOrd,
 {
-    fn ascent(&mut self, mut k: usize) -> usize {
-        while k + 1 < self.len() && self[k] > self[k + 1] {
-            self.swap(k, k + 1);
-            k += 1;
-        }
-        k
+    fn ascend(&mut self, k: usize) -> usize {
+        let idx = {
+            let slice = &self[k+1..];
+            slice.binary_search_for_insert(&self[k])
+        };
+
+        (k+1..idx).for_each(|x| self.swap(x - 1, x));
+        idx - 1
     }
 }
 
-pub trait Ascend {
-    fn ascent(&mut self, k: usize) -> usize;
+pub trait Ascent {
+    fn ascend(&mut self, k: usize) -> usize;
 }
 
-impl<T, A> Descend for Vec<T, A>
+impl<T, A> Descent for Vec<T, A>
 where
     A: Allocator,
     T: PartialOrd,
 {
-    fn descent(&mut self, mut k: usize) -> usize {
-        while k > 0 && self[k - 1] > self[k] {
-            self.swap(k - 1, k);
-            k -= 1;
-        }
-        k
+    fn descend(&mut self, k: usize) -> usize {
+        let idx = {
+            let slice = &self[..k];
+            slice.binary_search_for_insert(&self[k])
+        };
+
+        (idx..k).rev().for_each(|x| self.swap(x, x + 1));
+        idx
     }
 }
 
-pub trait Descend {
-    fn descent(&mut self, k: usize) -> usize;
+pub trait Descent {
+    fn descend(&mut self, k: usize) -> usize;
 }

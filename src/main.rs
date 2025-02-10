@@ -50,7 +50,7 @@ fn main() -> io::Result<()> {
         let len = blocks_needed(header.vrs);
         let a = {
             let layout = unsafe { Layout::from_size_align_unchecked(size_of::<usize>() * len, 8) };
-            PoolAlloc::new(layout, 5 + header.cls * header.vrs)
+            PoolAlloc::new(layout, 20 + header.cls * header.vrs)
         };
         //  let _b = {
         //      let layout = unsafe { Layout::from_size_align_unchecked(size_of::<usize>() * header.cls, 8) };
