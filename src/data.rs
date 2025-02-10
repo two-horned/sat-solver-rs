@@ -265,7 +265,7 @@ impl BitVec<'_> {
     }
 
     fn count_ones(&self) -> u32 {
-        self.content.iter().fold(0, |acc, x| acc + x.count_ones())
+        self.content.iter().map(|x| x.count_ones()).sum()
     }
 
     fn unsafe_iter_bin_op<'b>(

@@ -97,7 +97,7 @@ fn remove_rarest_literal(clauses: &mut Vec<Clause>, a: &PoolAlloc) -> bool {
             let v = clauses[a[1]].clone();
             let w = clauses[a[2]].clone();
             let x = clauses[a[3]].clone();
-            [u,v,w,x]
+            [u, v, w, x]
         };
 
         for i in 0..2 {
@@ -170,7 +170,9 @@ fn subjugate(clauses: &mut Vec<Clause>, k: usize) {
             let badness = badness.unwrap();
             other.unset(-badness);
             let j = clauses.descend(i);
-            if j < k { subjugate(clauses, j); }
+            if j < k {
+                subjugate(clauses, j);
+            }
         }
         i += 1
     }
