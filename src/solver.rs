@@ -2,16 +2,12 @@ use crate::alloc::PoolAlloc;
 use crate::data::{create_clause_blocks, Clause};
 use crate::utils::*;
 use crate::{apply_to_clauses, apply_to_slices};
+use core::cmp::Reverse;
+use core::usize;
 use rand::prelude::*;
-use std::cmp::Reverse;
-use std::usize;
-
-fn remove_tautologies(clauses: &mut Vec<Clause>) {
-    clauses.retain(|x| x.disjoint_switched_self())
-}
 
 fn prepare(clauses: &mut Vec<Clause>) {
-    remove_tautologies(clauses);
+    clauses.retain(|x| x.disjoint_switched_self());
     clauses.sort();
 }
 
@@ -185,19 +181,21 @@ fn combine(clauses: &mut Vec<Clause>) {
 }
 
 fn components(mut clauses: Vec<Clause>) -> Vec<Vec<Clause>> {
-    let mut v = Vec::new();
+    let mut v = Vec::with_capacity(clauses.len());
+    let mut e = Vec::with_capacity(clauses.len());
 
     while let Some(x) = clauses.pop() {
         let mut w = Vec::with_capacity(clauses.len());
         let mut r = x.variables();
         w.push(x.clone());
         loop {
-            let e = clauses.extract(|x| x.unsafe_has_variables(&r));
+            e.clear();
+            clauses.extract_in(&mut e, |x| x.unsafe_has_variables(&r));
             if e.is_empty() {
                 break;
             }
             e.iter().for_each(|x| x.unsafe_enrich_variables(&mut r));
-            w.extend(e);
+            w.extend_from_slice(&e);
         }
         w.sort();
         v.push(w);
@@ -234,6 +232,50 @@ fn choice(clauses: &Vec<Clause>) -> Option<isize> {
     let literals: Vec<isize> = clauses[0].iter_literals().collect();
     literals.choose(&mut rand::rng()).copied()
 }
+
+//  fn guess<'a>(clauses: Vec<Clause>, conflicts: &mut Clause, a: &'a PoolAlloc) -> bool {
+//      if clauses.is_empty() { return true; }
+//      if clauses[0].is_null() { false; }
+
+//      let comps = components(clauses);
+//      for mut c in comps {
+//          match choice(&c) {
+//              None => return false,
+//              Some(x) => {
+//                  resolve(x, &mut c);
+//                  kernelize(&mut c, a);
+//                  conflicts.set(-x);
+
+//                  match guess(c, conflicts, a) {
+//                      false => return false,
+//                      true => (),
+//                  }
+//              }
+//          }
+//      }
+//      true
+//  }
+
+//  pub fn solve_problem<'a>(mut clauses: Vec<Clause<'a>>, a: &'a PoolAlloc) -> bool {
+//      if clauses.len() == 0 {
+//          return true;
+//      };
+//      let len = clauses[0].content_length();
+//      prepare(&mut clauses);
+//      loop {
+//          kernelize(&mut clauses, a);
+//          let mut conflicts = create_clause_blocks(len, a);
+//          let res = guess(clauses.clone(), &mut conflicts, a);
+//          match res {
+//              true => return true,
+//              false => {
+//                  if conflicts.is_null() { return false; }
+//                  clauses.push(conflicts);
+//                  clauses.descent(clauses.len() - 1);
+//              }
+//          }
+//      }
+//  }
 
 fn guess(mut clauses: Vec<Clause>, a: &PoolAlloc) -> bool {
     kernelize(&mut clauses, a);

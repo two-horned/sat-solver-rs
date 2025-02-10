@@ -1,4 +1,4 @@
-#![feature(allocator_api, atomic_try_update, ptr_sub_ptr)]
+#![feature(allocator_api, ptr_sub_ptr)]
 
 pub mod alloc;
 pub mod data;

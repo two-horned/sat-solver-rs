@@ -45,8 +45,7 @@ fn main() -> io::Result<()> {
 
     if let Some(header) = h {
         let len = blocks_needed(header.vrs);
-        //let a = PoolAlloc::from(layout, header.cls * header.vrs).unwrap();
-        let a = PoolAlloc::new(len * size_of::<usize>(), header.cls * header.vrs);
+        let a = PoolAlloc::new(len * size_of::<usize>(), 5 + header.cls * header.vrs);
         let mut problem = Vec::new();
         while problem.len() < header.cls {
             let mut clause = create_clause_blocks(len, &a);

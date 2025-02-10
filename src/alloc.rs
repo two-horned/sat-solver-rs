@@ -1,6 +1,6 @@
-use std::alloc::{AllocError, Allocator, Layout};
-use std::iter;
-use std::ptr::NonNull;
+use core::alloc::{AllocError, Allocator, Layout};
+use core::iter;
+use core::ptr::NonNull;
 use std::sync::Mutex;
 
 pub struct PoolAlloc {
@@ -28,7 +28,6 @@ impl PoolAlloc {
 unsafe impl Allocator for PoolAlloc {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         if layout.size() != self.objsiz {
-            println!("Wrong size!, {:?} instead {:?}", layout.size(), self.objsiz);
             return Err(AllocError);
         }
 
