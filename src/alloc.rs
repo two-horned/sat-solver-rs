@@ -1,49 +1,64 @@
 use core::alloc::{AllocError, Allocator, Layout};
-use core::iter;
 use core::ptr::NonNull;
+use core::slice;
+use std::alloc::{alloc, dealloc};
 use std::sync::Mutex;
+
+impl PoolAlloc {
+    pub fn new(layout: Layout, capacity: usize) -> Self {
+        let objalg = layout.align();
+        let (memlyt, objsiz) = layout.repeat(capacity).unwrap();
+        let memory = unsafe { alloc(memlyt) };
+
+        let frptrs = Mutex::new(
+            (0..capacity)
+                .map(|x| unsafe { memory.add(x * objsiz) })
+                .collect(),
+        );
+        Self {
+            objsiz,
+            objalg,
+            frptrs,
+            memlyt,
+            memory,
+        }
+    }
+}
+
+impl Drop for PoolAlloc {
+    fn drop(&mut self) {
+        unsafe { dealloc(self.memory, self.memlyt) }
+    }
+}
 
 pub struct PoolAlloc {
     objsiz: usize,
-    memory: Mutex<PoolMemory>,
-}
-
-struct PoolMemory {
-    buffr: Box<[u8]>,
-    frees: Vec<usize>,
-}
-
-impl PoolAlloc {
-    pub fn new(obj_len: usize, capacity: usize) -> Self {
-        Self {
-            objsiz: obj_len,
-            memory: Mutex::new(PoolMemory {
-                buffr: iter::repeat_n(0, obj_len * capacity).collect(),
-                frees: (0..capacity).map(|x| obj_len * x).collect(),
-            }),
-        }
-    }
+    objalg: usize,
+    frptrs: Mutex<Vec<*mut u8>>,
+    memlyt: Layout,
+    memory: *mut u8,
 }
 
 unsafe impl Allocator for PoolAlloc {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        if layout.size() != self.objsiz {
+        let align = layout.align();
+        let size = layout.size();
+
+        if align > self.objalg || size > self.objsiz {
             return Err(AllocError);
         }
 
-        let mut memory = self.memory.lock().unwrap();
-        if let Some(start) = memory.frees.pop() {
-            let slice = &mut memory.buffr[start..start + self.objsiz];
-            Ok(NonNull::from(slice))
-        } else {
-            Err(AllocError)
+        let mut frptrs = self.frptrs.lock().unwrap();
+        if let Some(start) = frptrs.pop() {
+            let slice = unsafe { slice::from_raw_parts_mut(start, size) };
+            return Ok(unsafe { NonNull::new_unchecked(slice) });
         }
+
+        Err(AllocError)
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, _layout: Layout) {
-        let mut memory = self.memory.lock().unwrap();
-        let ptro = NonNull::from(&memory.buffr[0]);
-        let diff = ptr.sub_ptr(ptro);
-        memory.frees.push(diff);
+        let mut frptrs = self.frptrs.lock().unwrap();
+        frptrs.push(ptr.as_ptr());
     }
 }
