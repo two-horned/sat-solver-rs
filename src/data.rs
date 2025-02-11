@@ -32,11 +32,14 @@ impl Clause<'_> {
         self.pos.count_ones() + self.neg.count_ones()
     }
 
-    pub fn content_pos_mut(&mut self) -> &mut [usize] {
-        &mut self.pos.content
-    }
-    pub fn content_neg_mut(&mut self) -> &mut [usize] {
-        &mut self.neg.content
+    pub fn zip_clause<F>(&self, rhs: &Self, f: F) -> Self
+    where
+        F: Fn(usize, usize) -> usize,
+    {
+        Self {
+            pos: self.pos.zip_bits(&rhs.pos, &f),
+            neg: self.neg.zip_bits(&rhs.pos, f),
+        }
     }
 
     pub fn unsafe_zip_clause_in<F>(&mut self, rhs: &Self, f: F)
@@ -45,6 +48,14 @@ impl Clause<'_> {
     {
         self.pos.unsafe_zip_bits_in(&rhs.pos, &f);
         self.neg.unsafe_zip_bits_in(&rhs.neg, f);
+    }
+
+    pub fn unsafe_zip3_clause_in<F>(&mut self, rhs: &Self, rsh: &Self, f: F)
+    where
+        F: Fn(&mut usize, usize, usize) -> (),
+    {
+        self.pos.unsafe_zip3_bits_in(&rhs.pos, &rsh.pos, &f);
+        self.neg.unsafe_zip3_bits_in(&rhs.neg, &rsh.neg, &f);
     }
 
     pub fn subset_of(&self, rhs: &Self) -> bool {
@@ -99,47 +110,12 @@ impl Clause<'_> {
         false
     }
 
-    pub fn unsafe_related(&self, rhs: &Self) -> bool {
-        for i in 0..self.content_length() {
-            if 0 != (self.pos.content[i] | self.neg.content[i])
-                & (rhs.pos.content[i] | rhs.neg.content[i])
-            {
-                return true;
-            }
-        }
-        false
-    }
-
     pub fn disjoint(&self, rhs: &Self) -> bool {
         self.pos.disjoint(&rhs.pos) && self.neg.disjoint(&rhs.neg)
     }
 
     pub fn disjoint_switched_self(&self) -> bool {
         self.pos.disjoint(&self.neg)
-    }
-
-    pub fn find_shared(&self, rhs: &Self) -> Option<isize> {
-        match self.pos.find_shared(&rhs.pos) {
-            Some(x) => return Some(x as isize),
-            _ => (),
-        }
-        match self.neg.find_shared(&rhs.neg) {
-            Some(x) => return Some(-(x as isize)),
-            _ => (),
-        }
-        None
-    }
-
-    pub fn find_shared_switched(&self, rhs: &Self) -> Option<isize> {
-        match self.pos.find_shared(&rhs.neg) {
-            Some(x) => return Some(x as isize + 1),
-            _ => (),
-        }
-        match self.neg.find_shared(&rhs.pos) {
-            Some(x) => return Some(-(x as isize) - 1),
-            _ => (),
-        }
-        None
     }
 
     pub fn capacity(&self) -> usize {
@@ -307,6 +283,15 @@ impl BitVec<'_> {
         }
     }
 
+    fn unsafe_zip3_bits_in<F>(&mut self, rhs: &Self, rsh: &Self, f: F)
+    where
+        F: Fn(&mut usize, usize, usize) -> (),
+    {
+        for i in 0..self.content.len() {
+            f(&mut self.content[i], rhs.content[i], rsh.content[i]);
+        }
+    }
+
     fn set(&mut self, index: usize) {
         self.content[index / BLOCK_SIZE] |= 1 << (index % BLOCK_SIZE);
     }
@@ -328,16 +313,6 @@ impl BitVec<'_> {
             .iter()
             .zip(rhs.content.iter())
             .all(|(x, y)| x & !y == 0)
-    }
-
-    fn find_shared(&self, rhs: &Self) -> Option<usize> {
-        for i in 0..usize::min(self.content.len(), rhs.content.len()) {
-            let test = self.content[i] & rhs.content[i];
-            if test != 0 {
-                return Some(i * BLOCK_SIZE + test.trailing_zeros() as usize);
-            }
-        }
-        None
     }
 
     fn disjoint(&self, rhs: &Self) -> bool {

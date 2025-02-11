@@ -1,7 +1,6 @@
 use crate::alloc::PoolAlloc;
 use crate::data::{create_clause_blocks, Clause};
 use crate::utils::*;
-use crate::{apply_to_clauses, apply_to_slices};
 use core::cmp::Reverse;
 use core::usize;
 use rand::prelude::*;
@@ -34,17 +33,6 @@ fn remove_long_clauses(clauses: &mut Vec<Clause>) {
 }
 
 fn remove_rarest_literal(clauses: &mut Vec<Clause>, a: &PoolAlloc) -> bool {
-    fn update_appearances(now: &usize, once: &mut usize, twice: &mut usize, thrice: &mut usize) {
-        *once |= now;
-        *twice |= *once & now;
-        *thrice |= *twice & now;
-    }
-
-    fn fix_appearances(once: &mut usize, twice: &mut usize, thrice: &usize) {
-        *once &= !(*twice | thrice);
-        *twice &= !thrice;
-    }
-
     fn fix_clause(clauses: &mut Vec<Clause>, k: usize) {
         if clauses[k].disjoint_switched_self() {
             clauses.ascend(k);
@@ -119,9 +107,12 @@ fn remove_rarest_literal(clauses: &mut Vec<Clause>, a: &PoolAlloc) -> bool {
     let mut thrice = create_clause_blocks(len, a);
 
     for clause in &mut *clauses {
-        apply_to_clauses!(update_appearances, len, clause, once, twice, thrice);
+        once.unsafe_zip_clause_in(&clause, |x, y| *x |= y);
+        twice.unsafe_zip3_clause_in(&clause, &once, |x, y, z| *x |= y & z);
+        thrice.unsafe_zip3_clause_in(&clause, &twice, |x, y, z| *x |= y & z);
     }
-    apply_to_clauses!(fix_appearances, len, once, twice, thrice);
+    once.unsafe_zip3_clause_in(&twice, &thrice, |x, y, z| *x &= !(y | z));
+    twice.unsafe_zip_clause_in(&thrice, |x, y| *x &= !y);
 
     match once.iter_literals().next() {
         None => (),
@@ -320,23 +311,3 @@ pub fn solve_problem(mut clauses: Vec<Clause>, a: &PoolAlloc) -> bool {
     prepare(&mut clauses);
     guess(clauses, a)
 }
-
-//fn prints(clauses: &Vec<Clause>) {
-//    println!("Sorted? {}", clauses.iter().skip(1).zip(clauses).all(|(x,y)| y <= x));
-//}
-//fn prints(clauses: &Vec<Clause>) {
-//    for c in clauses {
-//        println!("Clause, LENGTH {} ", c.content_pos().len());
-//    }
-//    println!("END");
-//}
-//fn prints(clauses: &Vec<Clause>) {
-//    for c in clauses {
-//        print!("Clause {:?}", c);
-//        for literal in c.iter_literals() {
-//            print!("{}, ", literal);
-//        }
-//        println!("");
-//    }
-//    println!("END");
-//}
