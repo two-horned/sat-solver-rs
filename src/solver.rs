@@ -217,38 +217,24 @@ fn components(mut clauses: Vec<Clause>) -> Vec<Vec<Clause>> {
     v
 }
 
-fn cheap_kernelize(clauses: &mut Vec<Clause>, a: &PoolAlloc) -> bool {
-    let mut kernelized = false;
+fn kernelize(clauses: &mut Vec<Clause>, a: &PoolAlloc) {
     loop {
-        let old_length = clauses.len();
-        remove_long_clauses(clauses);
-        remove_pure_literals(clauses);
-        if old_length != clauses.len() {
-            kernelized = true;
-            continue;
+        combine(clauses);
+        loop {
+            let old_length = clauses.len();
+            remove_long_clauses(clauses);
+            remove_pure_literals(clauses);
+            if old_length != clauses.len() {
+                continue;
+            }
+            break;
         }
         if remove_rarest_literal(clauses, a) {
-            kernelized = true;
             continue;
         }
         break;
     }
-    kernelized
 }
-
-fn kernelize(clauses: &mut Vec<Clause>, a: &PoolAlloc) {
-    combine(clauses);
-    cheap_kernelize(clauses, a);
-}
-
-fn kernelize_from(clauses: &mut Vec<Clause>, k: usize, a: &PoolAlloc) {
-    subjugate(clauses, k);
-    cheap_kernelize(clauses, a);
-}
-
-//  fn choice(clauses: &Vec<Clause>) -> Option<isize> {
-//      clauses[0].iter_literals().next()
-//  }
 
 fn choice(clauses: &Vec<Clause>) -> Option<isize> {
     let literals: Vec<isize> = clauses[0].iter_literals().collect();
@@ -308,6 +294,7 @@ fn guess(mut clauses: Vec<Clause>, a: &PoolAlloc) -> bool {
         return true;
     }
     let comps = components(clauses);
+    //println!("Length of components is {}", comps.len());
 
     for mut c in comps {
         let v = choice(&c);
