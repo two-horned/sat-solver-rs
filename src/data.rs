@@ -201,7 +201,7 @@ where
 {
     type Item = usize;
     fn next(&mut self) -> Option<Self::Item> {
-        while self.idx < self.op1.len() && self.num == 0 {
+        while self.num == 0 && self.idx < self.op1.len() {
             self.num = (self.f)(self.op1[self.idx], self.op2[self.idx]);
             self.idx += 1;
         }
@@ -230,9 +230,7 @@ impl FusedIterator for IterOnes<'_> {}
 
 impl ExactSizeIterator for IterOnes<'_> {
     fn len(&self) -> usize {
-        self.vls
-            .iter()
-            .fold(0, |acc, x| acc + x.count_ones() as usize)
+        self.vls.iter().map(|x| x.count_ones() as usize).sum()
     }
 }
 
@@ -326,12 +324,10 @@ impl BitVec<'_> {
     }
 
     fn subset_of(&self, rhs: &Self) -> bool {
-        for i in 0..usize::min(self.content.len(), rhs.content.len()) {
-            if self.content[i] & !rhs.content[i] != 0 {
-                return false;
-            }
-        }
-        true
+        self.content
+            .iter()
+            .zip(rhs.content.iter())
+            .all(|(x, y)| x & !y == 0)
     }
 
     fn find_shared(&self, rhs: &Self) -> Option<usize> {

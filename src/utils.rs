@@ -158,8 +158,16 @@ where
             k + slice.exponential_search_for_insert(&self[k])
         };
 
-        (k..idx).for_each(|x| self.swap(x, x + 1));
-        //assert!(self.is_sorted());
+        if idx != k {
+            unsafe {
+                let cpy = self.as_ptr().add(k).read();
+                let src = self.as_mut_ptr().add(k + 1);
+                let dst = self.as_mut_ptr().add(k);
+                copy(src, dst, idx - k);
+                src.add(idx - k).write(cpy);
+            }
+        }
+
         idx
     }
 }
@@ -179,8 +187,16 @@ where
             slice.exponential_search_for_insert_back(&self[k])
         };
 
-        (idx..k).rev().for_each(|x| self.swap(x, x + 1));
-        //assert!(self.is_sorted());
+        if idx != k {
+            unsafe {
+                let cpy = self.as_ptr().add(k).read();
+                let src = self.as_mut_ptr().add(idx);
+                let dst = self.as_mut_ptr().add(idx + 1);
+                copy(src, dst, k - idx);
+                src.write(cpy);
+            }
+        }
+
         idx
     }
 }

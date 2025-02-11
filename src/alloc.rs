@@ -25,6 +25,8 @@ impl PoolAlloc {
     }
 }
 
+unsafe impl Sync for PoolAlloc {}
+
 impl Drop for PoolAlloc {
     fn drop(&mut self) {
         unsafe { dealloc(self.memory, self.memlyt) }

@@ -169,9 +169,16 @@ fn subjugate(clauses: &mut Vec<Clause>, k: usize) {
         if badness.is_some() && control.is_none() {
             let badness = badness.unwrap();
             other.unset(-badness);
-            let j = clauses.descend(i);
+            let mut j = clauses.descend(i);
             if j < k {
-                subjugate(clauses, j);
+                if clauses[j] >= current {
+                    while j < k {
+                        clauses.swap(j, j + 1);
+                        j += 1;
+                    }
+                } else {
+                    subjugate(clauses, j);
+                }
             }
         }
         i += 1
@@ -210,24 +217,33 @@ fn components(mut clauses: Vec<Clause>) -> Vec<Vec<Clause>> {
     v
 }
 
-fn kernelize(clauses: &mut Vec<Clause>, a: &PoolAlloc) {
-    let mut old_length;
+fn cheap_kernelize(clauses: &mut Vec<Clause>, a: &PoolAlloc) -> bool {
+    let mut kernelized = false;
     loop {
-        combine(clauses);
-        loop {
-            old_length = clauses.len();
-            remove_long_clauses(clauses);
-            remove_pure_literals(clauses);
-            if old_length != clauses.len() {
-                continue;
-            }
-            break;
+        let old_length = clauses.len();
+        remove_long_clauses(clauses);
+        remove_pure_literals(clauses);
+        if old_length != clauses.len() {
+            kernelized = true;
+            continue;
         }
         if remove_rarest_literal(clauses, a) {
+            kernelized = true;
             continue;
         }
         break;
     }
+    kernelized
+}
+
+fn kernelize(clauses: &mut Vec<Clause>, a: &PoolAlloc) {
+    combine(clauses);
+    cheap_kernelize(clauses, a);
+}
+
+fn kernelize_from(clauses: &mut Vec<Clause>, k: usize, a: &PoolAlloc) {
+    subjugate(clauses, k);
+    cheap_kernelize(clauses, a);
 }
 
 //  fn choice(clauses: &Vec<Clause>) -> Option<isize> {
@@ -254,7 +270,7 @@ fn choice(clauses: &Vec<Clause>) -> Option<isize> {
 
 //                  match guess(c, conflicts, a) {
 //                      false => return false,
-//                      true => (),
+//                      true => conflicts.unset(-x),
 //                  }
 //              }
 //          }
@@ -263,21 +279,24 @@ fn choice(clauses: &Vec<Clause>) -> Option<isize> {
 //  }
 
 //  pub fn solve_problem<'a>(mut clauses: Vec<Clause<'a>>, a: &'a PoolAlloc) -> bool {
+//      let mut wrong_guesses = 0;
 //      if clauses.len() == 0 {
 //          return true;
 //      };
 //      let len = clauses[0].content_length();
 //      prepare(&mut clauses);
+//      kernelize(&mut clauses, a);
 //      loop {
-//          kernelize(&mut clauses, a);
 //          let mut conflicts = create_clause_blocks(len, a);
 //          let res = guess(clauses.clone(), &mut conflicts, a);
 //          match res {
-//              true => return true,
+//              true => {println!("Wrong guesses: {}", wrong_guesses);return true},
 //              false => {
-//                  if conflicts.is_null() { return false; }
+//                  wrong_guesses += 1;
+//                  if conflicts.is_null() { println!("Wrong guesses: {}", wrong_guesses); return false; }
 //                  clauses.push(conflicts);
-//                  clauses.descent(clauses.len() - 1);
+//                  let k = clauses.descend(clauses.len() - 1);
+//                  kernelize_from(&mut clauses, k, a);
 //              }
 //          }
 //      }
