@@ -7,18 +7,36 @@ impl<T, A: Allocator> ExtractIn<T> for Vec<T, A> {
         F: Fn(&T) -> bool,
     {
         let mut deleted = 0;
+        let mut consequtives = 0;
         let len = self.len();
 
         unsafe {
-            for i in 0..len {
-                let src = self.as_mut_ptr().add(i);
-                if f(&self[i]) {
-                    other.push(src.read());
-                    deleted += 1;
+            let mut i = 0;
+            while i < len && !f(&self[i]) {
+                i += 1;
+            }
+            for j in i..len {
+                if !f(&self[j]) {
+                    consequtives += 1;
                 } else {
-                    let dst = self.as_mut_ptr().add(i - deleted);
-                    copy(src, dst, 1);
+                    if consequtives != 0 {
+                        let from = j - consequtives;
+                        let src = self.as_ptr().add(from);
+                        let dst = self.as_mut_ptr().add(from - deleted);
+                        copy(src, dst, consequtives);
+                        consequtives = 0;
+                    }
+                    let cpy = self.as_ptr().add(j).read();
+                    other.push(cpy);
+                    deleted += 1;
                 }
+            }
+
+            if deleted != 0 && consequtives != 0 {
+                let from = len - consequtives;
+                let src = self.as_ptr().add(from);
+                let dst = self.as_mut_ptr().add(from - deleted);
+                copy(src, dst, consequtives);
             }
             self.set_len(len - deleted);
         }
@@ -37,18 +55,35 @@ impl<T, A: Allocator> RetainFrom<T> for Vec<T, A> {
         F: Fn(&T) -> bool,
     {
         let mut deleted = 0;
+        let mut consequtives = 0;
         let len = self.len();
 
         unsafe {
-            for i in start..len {
-                let src = self.as_mut_ptr().add(i);
-                if f(&self[i]) {
-                    let dst = self.as_mut_ptr().add(i - deleted);
-                    copy(src, dst, 1);
+            let mut i = start;
+            while i < len && f(&self[i]) {
+                i += 1;
+            }
+            for j in i..len {
+                if f(&self[j]) {
+                    consequtives += 1;
                 } else {
-                    drop_in_place(src);
+                    if consequtives != 0 {
+                        let from = j - consequtives;
+                        let src = self.as_ptr().add(from);
+                        let dst = self.as_mut_ptr().add(from - deleted);
+                        copy(src, dst, consequtives);
+                        consequtives = 0;
+                    }
+                    drop_in_place(self.as_mut_ptr().add(j));
                     deleted += 1;
                 }
+            }
+
+            if deleted != 0 && consequtives != 0 {
+                let from = len - consequtives;
+                let src = self.as_ptr().add(from);
+                let dst = self.as_mut_ptr().add(from - deleted);
+                copy(src, dst, consequtives);
             }
             self.set_len(len - deleted);
         }
