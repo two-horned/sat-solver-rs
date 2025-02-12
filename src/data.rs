@@ -1,9 +1,9 @@
 use crate::alloc::PoolAlloc;
-use std::cell::OnceCell;
-use std::iter::FusedIterator;
-use std::{cmp, usize};
+use core::cell::OnceCell;
+use core::iter::{self, FusedIterator};
+use core::{cmp, usize};
 
-const BLOCK_SIZE: usize = usize::BITS as usize;
+pub const BLOCK_SIZE: usize = usize::BITS as usize;
 
 #[derive(Debug)]
 pub enum ParseProblemError {
@@ -139,14 +139,14 @@ impl Clause<'_> {
         &self,
         rhs: &'b Self,
     ) -> impl Iterator<Item = isize> + use<'_, 'b> {
-        self.pos
-            .unsafe_iter_bin_op(&rhs.pos)
-            .map(|x| x as isize + 1)
-            .chain(
-                self.neg
-                    .unsafe_iter_bin_op(&rhs.neg)
-                    .map(|x| -(1 + x as isize)),
-            )
+        iter::chain(
+            self.pos
+                .unsafe_iter_bin_op(&rhs.pos, |x, y| x & !y)
+                .map(|x| x as isize + 1),
+            self.neg
+                .unsafe_iter_bin_op(&rhs.neg, |x, y| x & !y)
+                .map(|x| -(1 + x as isize)),
+        )
     }
 
     pub fn is_null(&self) -> bool {
@@ -166,71 +166,35 @@ pub struct Clause<'a> {
     neg: BitVec<'a>,
 }
 
-impl<F> FusedIterator for BinOpIterOnes<'_, '_, F> where F: Fn(usize, usize) -> usize {}
-
-impl<F> Iterator for BinOpIterOnes<'_, '_, F>
-where
-    F: Fn(usize, usize) -> usize,
-{
-    type Item = usize;
-    fn next(&mut self) -> Option<Self::Item> {
-        while self.num == 0 && self.idx < self.op1.len() {
-            self.num = (self.f)(self.op1[self.idx], self.op2[self.idx]);
-            self.idx += 1;
-        }
-
-        if self.num != 0 {
-            let res = self.num.trailing_zeros() as usize + (self.idx - 1) * BLOCK_SIZE;
-            self.num &= self.num - 1;
-            return Some(res);
-        }
-        None
+impl IterOne {
+    fn new(num: usize) -> Self {
+        Self { num }
     }
 }
 
-struct BinOpIterOnes<'a, 'b, F>
-where
-    F: Fn(usize, usize) -> usize,
-{
-    f: F,
-    num: usize,
-    idx: usize,
-    op1: &'a [usize],
-    op2: &'b [usize],
-}
-
-impl FusedIterator for IterOnes<'_> {}
-
-impl ExactSizeIterator for IterOnes<'_> {
+impl ExactSizeIterator for IterOne {
     fn len(&self) -> usize {
-        *self
-            .len
-            .get_or_init(|| self.vls.iter().map(|x| x.count_ones()).sum::<u32>() as usize)
+        self.num.count_ones() as usize
     }
 }
 
-impl Iterator for IterOnes<'_> {
+impl FusedIterator for IterOne {}
+
+impl Iterator for IterOne {
     type Item = usize;
     fn next(&mut self) -> Option<Self::Item> {
-        while self.idx < self.vls.len() && self.num == 0 {
-            self.num = self.vls[self.idx];
-            self.idx += 1;
-        }
-
-        if self.num != 0 {
-            let res = self.num.trailing_zeros() as usize + (self.idx - 1) * BLOCK_SIZE;
+        if self.num == 0 {
+            return None;
+        } else {
+            let tmp = self.num.trailing_zeros() as usize;
             self.num &= self.num - 1;
-            return Some(res);
+            Some(tmp)
         }
-        None
     }
 }
 
-struct IterOnes<'a> {
+struct IterOne {
     num: usize,
-    len: OnceCell<usize>,
-    idx: usize,
-    vls: &'a [usize],
 }
 
 impl BitVec<'_> {
@@ -244,26 +208,26 @@ impl BitVec<'_> {
         self.content.iter().all(|&x| x == 0)
     }
 
-    fn unsafe_iter_bin_op<'b>(
+    fn unsafe_iter_bin_op<'b, F>(
         &self,
         rhs: &'b Self,
-    ) -> BinOpIterOnes<'_, 'b, fn(usize, usize) -> usize> {
-        BinOpIterOnes {
-            f: |x, y| x & !y,
-            num: 0,
-            idx: 0,
-            op1: &self.content,
-            op2: &rhs.content,
-        }
+        f: F,
+    ) -> impl Iterator<Item = usize> + use<'_, 'b, F>
+    where
+        F: Fn(usize, usize) -> usize,
+    {
+        self.content
+            .iter()
+            .zip(rhs.content.iter())
+            .enumerate()
+            .flat_map(move |(i, (&x, &y))| IterOne::new(f(x, y)).map(move |z| i * BLOCK_SIZE + z))
     }
 
-    fn iter_ones(&self) -> IterOnes<'_> {
-        IterOnes {
-            len: self.ones.clone(),
-            num: 0,
-            idx: 0,
-            vls: &self.content,
-        }
+    fn iter_ones(&self) -> impl Iterator<Item = usize> + use<'_> {
+        self.content
+            .iter()
+            .enumerate()
+            .flat_map(|(i, &x)| IterOne::new(x).map(move |y| i * BLOCK_SIZE + y))
     }
 
     fn zip_bits<F>(&self, rhs: &Self, f: F) -> Self

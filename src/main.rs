@@ -1,6 +1,7 @@
 #![feature(allocator_api)]
 
 use sat_solver::alloc::PoolAlloc;
+use sat_solver::data::BLOCK_SIZE;
 use sat_solver::data::{blocks_needed, create_clause_blocks, ParseProblemError};
 use sat_solver::solver::solve_problem;
 use std::alloc::Layout;
@@ -49,7 +50,8 @@ fn main() -> io::Result<()> {
     if let Some(header) = h {
         let len = blocks_needed(header.vrs);
         let a = {
-            let layout = unsafe { Layout::from_size_align_unchecked(size_of::<usize>() * len, 8) };
+            let layout =
+                unsafe { Layout::from_size_align_unchecked(BLOCK_SIZE as usize * len, 32) };
             PoolAlloc::new(layout, 20 + header.cls * header.vrs)
         };
         //  let _b = {
