@@ -1,4 +1,5 @@
 use crate::alloc::PoolAlloc;
+use std::cell::OnceCell;
 use std::iter::FusedIterator;
 use std::{cmp, usize};
 
@@ -18,6 +19,7 @@ pub fn blocks_needed(vrs: usize) -> usize {
 
 pub fn create_clause_blocks<'a>(blocks: usize, a: &'a PoolAlloc) -> Clause<'a> {
     Clause {
+        elm: OnceCell::new(),
         pos: BitVec {
             content: unsafe { Box::new_zeroed_slice_in(blocks, a).assume_init() },
         },
@@ -28,8 +30,10 @@ pub fn create_clause_blocks<'a>(blocks: usize, a: &'a PoolAlloc) -> Clause<'a> {
 }
 
 impl Clause<'_> {
-    pub fn count_ones(&self) -> u32 {
-        self.pos.count_ones() + self.neg.count_ones()
+    pub fn elements(&self) -> usize {
+        *self
+            .elm
+            .get_or_init(|| (self.pos.count_ones() + self.neg.count_ones()) as usize)
     }
 
     pub fn zip_clause<F>(&self, rhs: &Self, f: F) -> Self
@@ -37,6 +41,7 @@ impl Clause<'_> {
         F: Fn(usize, usize) -> usize,
     {
         Self {
+            elm: OnceCell::new(),
             pos: self.pos.zip_bits(&rhs.pos, &f),
             neg: self.neg.zip_bits(&rhs.pos, f),
         }
@@ -46,6 +51,7 @@ impl Clause<'_> {
     where
         F: Fn(&mut usize, usize) -> (),
     {
+        self.elm.take();
         self.pos.unsafe_zip_bits_in(&rhs.pos, &f);
         self.neg.unsafe_zip_bits_in(&rhs.neg, f);
     }
@@ -54,6 +60,7 @@ impl Clause<'_> {
     where
         F: Fn(&mut usize, usize, usize) -> (),
     {
+        self.elm.take();
         self.pos.unsafe_zip3_bits_in(&rhs.pos, &rsh.pos, &f);
         self.neg.unsafe_zip3_bits_in(&rhs.neg, &rsh.neg, &f);
     }
@@ -65,7 +72,11 @@ impl Clause<'_> {
     pub fn difference_switched_self(&self) -> Self {
         let pos = self.pos.difference(&self.neg);
         let neg = self.neg.difference(&self.pos);
-        Self { pos, neg }
+        Self {
+            elm: OnceCell::new(),
+            pos,
+            neg,
+        }
     }
 
     pub fn read(&self, index: isize) -> bool {
@@ -77,6 +88,7 @@ impl Clause<'_> {
     }
 
     pub fn set(&mut self, index: isize) {
+        self.elm.take();
         if index < 0 {
             self.neg.set(-index as usize - 1)
         } else {
@@ -84,6 +96,7 @@ impl Clause<'_> {
         }
     }
     pub fn unset(&mut self, index: isize) {
+        self.elm.take();
         if index < 0 {
             self.neg.unset(-index as usize - 1)
         } else {
@@ -153,18 +166,13 @@ impl Clause<'_> {
 
 impl PartialOrd for Clause<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
-        self.count_ones().partial_cmp(&other.count_ones())
-    }
-}
-
-impl Ord for Clause<'_> {
-    fn cmp(&self, other: &Self) -> cmp::Ordering {
-        self.count_ones().cmp(&other.count_ones())
+        self.elements().partial_cmp(&other.elements())
     }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Clause<'a> {
+    elm: OnceCell<usize>,
     pos: BitVec<'a>,
     neg: BitVec<'a>,
 }

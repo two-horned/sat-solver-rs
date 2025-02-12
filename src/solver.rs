@@ -7,7 +7,7 @@ use rand::prelude::*;
 
 fn prepare(clauses: &mut Vec<Clause>) {
     clauses.retain(|x| x.disjoint_switched_self());
-    clauses.sort();
+    clauses.sort_by_key(Clause::elements);
 }
 
 fn remove_pure_literals(clauses: &mut Vec<Clause>) {
@@ -23,8 +23,8 @@ fn remove_pure_literals(clauses: &mut Vec<Clause>) {
 }
 
 fn remove_long_clauses(clauses: &mut Vec<Clause>) {
-    while let Some(last) = clauses.last() {
-        if last.count_ones() as usize >= clauses.len() {
+    while let Some(last) = clauses.last_mut() {
+        if last.elements() >= clauses.len() {
             clauses.pop();
         } else {
             return;
@@ -201,7 +201,7 @@ fn components(mut clauses: Vec<Clause>) -> Vec<Vec<Clause>> {
             e.iter().for_each(|x| x.unsafe_enrich_variables(&mut r));
             w.extend_from_slice(&e);
         }
-        w.sort();
+        w.sort_by_key(Clause::elements);
         v.push(w);
     }
     v.sort_by(|x, y| usize::cmp(&x.len(), &y.len()));
