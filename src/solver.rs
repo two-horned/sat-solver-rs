@@ -232,74 +232,26 @@ fn choice(clauses: &Vec<Clause>) -> Option<isize> {
     literals.choose(&mut rand::rng()).copied()
 }
 
-//  fn guess<'a>(clauses: Vec<Clause>, conflicts: &mut Clause, a: &'a PoolAlloc) -> bool {
-//      if clauses.is_empty() { return true; }
-//      if clauses[0].is_null() { false; }
-
-//      let comps = components(clauses);
-//      for mut c in comps {
-//          match choice(&c) {
-//              None => return false,
-//              Some(x) => {
-//                  resolve(x, &mut c);
-//                  kernelize(&mut c, a);
-//                  conflicts.set(-x);
-
-//                  match guess(c, conflicts, a) {
-//                      false => return false,
-//                      true => conflicts.unset(-x),
-//                  }
-//              }
-//          }
-//      }
-//      true
-//  }
-
-//  pub fn solve_problem<'a>(mut clauses: Vec<Clause<'a>>, a: &'a PoolAlloc) -> bool {
-//      let mut wrong_guesses = 0;
-//      if clauses.len() == 0 {
-//          return true;
-//      };
-//      let len = clauses[0].content_length();
-//      prepare(&mut clauses);
-//      kernelize(&mut clauses, a);
-//      loop {
-//          let mut conflicts = create_clause_blocks(len, a);
-//          let res = guess(clauses.clone(), &mut conflicts, a);
-//          match res {
-//              true => {println!("Wrong guesses: {}", wrong_guesses);return true},
-//              false => {
-//                  wrong_guesses += 1;
-//                  if conflicts.is_null() { println!("Wrong guesses: {}", wrong_guesses); return false; }
-//                  clauses.push(conflicts);
-//                  let k = clauses.descend(clauses.len() - 1);
-//                  kernelize_from(&mut clauses, k, a);
-//              }
-//          }
-//      }
-//  }
-
-fn guess(mut clauses: Vec<Clause>, a: &PoolAlloc) -> bool {
-    kernelize(&mut clauses, a);
+fn guess<'a>(clauses: Vec<Clause>, conflicts: &mut Clause, a: &'a PoolAlloc) -> bool {
     if clauses.is_empty() {
         return true;
     }
-    let comps = components(clauses);
-    //println!("Length of components is {}", comps.len());
+    if clauses[0].is_null() {
+        false;
+    }
 
+    let comps = components(clauses);
     for mut c in comps {
-        let v = choice(&c);
-        match v {
+        match choice(&c) {
             None => return false,
             Some(x) => {
-                let mut d = c.clone();
                 resolve(x, &mut c);
-                if guess(c, a) {
-                    continue;
-                }
-                resolve(-x, &mut d);
-                if !guess(d, a) {
-                    return false;
+                kernelize(&mut c, a);
+                conflicts.set(-x);
+
+                match guess(c, conflicts, a) {
+                    false => return false,
+                    true => conflicts.unset(-x),
                 }
             }
         }
@@ -307,7 +259,64 @@ fn guess(mut clauses: Vec<Clause>, a: &PoolAlloc) -> bool {
     true
 }
 
-pub fn solve_problem(mut clauses: Vec<Clause>, a: &PoolAlloc) -> bool {
+pub fn solve_problem<'a>(mut clauses: Vec<Clause<'a>>, a: &'a PoolAlloc) -> bool {
+    let mut wrong_guesses = 0;
+    if clauses.len() == 0 {
+        return true;
+    };
+    let len = clauses[0].content_length();
     prepare(&mut clauses);
-    guess(clauses, a)
+    loop {
+        kernelize(&mut clauses, a);
+        let mut conflicts = create_clause_blocks(len, a);
+        let res = guess(clauses.clone(), &mut conflicts, a);
+        match res {
+            true => {
+                println!("Wrong guesses: {}", wrong_guesses);
+                return true;
+            }
+            false => {
+                wrong_guesses += 1;
+                if conflicts.is_null() {
+                    println!("Wrong guesses: {}", wrong_guesses);
+                    return false;
+                }
+                clauses.push(conflicts);
+                clauses.descend(clauses.len() - 1);
+            }
+        }
+    }
 }
+
+//  fn guess(mut clauses: Vec<Clause>, a: &PoolAlloc) -> bool {
+//      kernelize(&mut clauses, a);
+//      if clauses.is_empty() {
+//          return true;
+//      }
+//      let comps = components(clauses);
+//      //println!("Length of components is {}", comps.len());
+
+//      for mut c in comps {
+//          let v = choice(&c);
+//          match v {
+//              None => return false,
+//              Some(x) => {
+//                  let mut d = c.clone();
+//                  resolve(x, &mut c);
+//                  if guess(c, a) {
+//                      continue;
+//                  }
+//                  resolve(-x, &mut d);
+//                  if !guess(d, a) {
+//                      return false;
+//                  }
+//              }
+//          }
+//      }
+//      true
+//  }
+
+//  pub fn solve_problem(mut clauses: Vec<Clause>, a: &PoolAlloc) -> bool {
+//      prepare(&mut clauses);
+//      guess(clauses, a)
+//  }
