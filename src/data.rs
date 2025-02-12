@@ -19,11 +19,12 @@ pub fn blocks_needed(vrs: usize) -> usize {
 
 pub fn create_clause_blocks<'a>(blocks: usize, a: &'a PoolAlloc) -> Clause<'a> {
     Clause {
-        elm: OnceCell::new(),
         pos: BitVec {
+            ones: OnceCell::new(),
             content: unsafe { Box::new_zeroed_slice_in(blocks, a).assume_init() },
         },
         neg: BitVec {
+            ones: OnceCell::new(),
             content: unsafe { Box::new_zeroed_slice_in(blocks, a).assume_init() },
         },
     }
@@ -31,9 +32,7 @@ pub fn create_clause_blocks<'a>(blocks: usize, a: &'a PoolAlloc) -> Clause<'a> {
 
 impl Clause<'_> {
     pub fn elements(&self) -> usize {
-        *self
-            .elm
-            .get_or_init(|| (self.pos.count_ones() + self.neg.count_ones()) as usize)
+        self.pos.ones() + self.neg.ones()
     }
 
     pub fn zip_clause<F>(&self, rhs: &Self, f: F) -> Self
@@ -41,7 +40,6 @@ impl Clause<'_> {
         F: Fn(usize, usize) -> usize,
     {
         Self {
-            elm: OnceCell::new(),
             pos: self.pos.zip_bits(&rhs.pos, &f),
             neg: self.neg.zip_bits(&rhs.pos, f),
         }
@@ -51,7 +49,6 @@ impl Clause<'_> {
     where
         F: Fn(&mut usize, usize) -> (),
     {
-        self.elm.take();
         self.pos.unsafe_zip_bits_in(&rhs.pos, &f);
         self.neg.unsafe_zip_bits_in(&rhs.neg, f);
     }
@@ -60,7 +57,6 @@ impl Clause<'_> {
     where
         F: Fn(&mut usize, usize, usize) -> (),
     {
-        self.elm.take();
         self.pos.unsafe_zip3_bits_in(&rhs.pos, &rsh.pos, &f);
         self.neg.unsafe_zip3_bits_in(&rhs.neg, &rsh.neg, &f);
     }
@@ -72,11 +68,7 @@ impl Clause<'_> {
     pub fn difference_switched_self(&self) -> Self {
         let pos = self.pos.difference(&self.neg);
         let neg = self.neg.difference(&self.pos);
-        Self {
-            elm: OnceCell::new(),
-            pos,
-            neg,
-        }
+        Self { pos, neg }
     }
 
     pub fn read(&self, index: isize) -> bool {
@@ -88,7 +80,6 @@ impl Clause<'_> {
     }
 
     pub fn set(&mut self, index: isize) {
-        self.elm.take();
         if index < 0 {
             self.neg.set(-index as usize - 1)
         } else {
@@ -96,7 +87,6 @@ impl Clause<'_> {
         }
     }
     pub fn unset(&mut self, index: isize) {
-        self.elm.take();
         if index < 0 {
             self.neg.unset(-index as usize - 1)
         } else {
@@ -172,7 +162,6 @@ impl PartialOrd for Clause<'_> {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Clause<'a> {
-    elm: OnceCell<usize>,
     pos: BitVec<'a>,
     neg: BitVec<'a>,
 }
@@ -214,7 +203,9 @@ impl FusedIterator for IterOnes<'_> {}
 
 impl ExactSizeIterator for IterOnes<'_> {
     fn len(&self) -> usize {
-        self.vls.iter().map(|x| x.count_ones() as usize).sum()
+        *self
+            .len
+            .get_or_init(|| self.vls.iter().map(|x| x.count_ones()).sum::<u32>() as usize)
     }
 }
 
@@ -237,17 +228,20 @@ impl Iterator for IterOnes<'_> {
 
 struct IterOnes<'a> {
     num: usize,
+    len: OnceCell<usize>,
     idx: usize,
     vls: &'a [usize],
 }
 
 impl BitVec<'_> {
-    fn is_null(&self) -> bool {
-        self.content.iter().all(|&x| x == 0)
+    fn ones(&self) -> usize {
+        *self
+            .ones
+            .get_or_init(|| self.content.iter().map(|x| x.count_ones()).sum::<u32>() as usize)
     }
 
-    fn count_ones(&self) -> u32 {
-        self.content.iter().map(|x| x.count_ones()).sum()
+    fn is_null(&self) -> bool {
+        self.content.iter().all(|&x| x == 0)
     }
 
     fn unsafe_iter_bin_op<'b>(
@@ -265,6 +259,7 @@ impl BitVec<'_> {
 
     fn iter_ones(&self) -> IterOnes<'_> {
         IterOnes {
+            len: self.ones.clone(),
             num: 0,
             idx: 0,
             vls: &self.content,
@@ -276,6 +271,7 @@ impl BitVec<'_> {
         F: Fn(usize, usize) -> usize,
     {
         let mut res = Self {
+            ones: OnceCell::new(),
             content: self.content.clone(),
         };
         res.unsafe_zip_bits_in(&rhs, |x, y| *x = f(*x, y));
@@ -286,6 +282,7 @@ impl BitVec<'_> {
     where
         F: Fn(&mut usize, usize) -> (),
     {
+        self.ones.take();
         for i in 0..self.content.len() {
             f(&mut self.content[i], rhs.content[i]);
         }
@@ -295,16 +292,19 @@ impl BitVec<'_> {
     where
         F: Fn(&mut usize, usize, usize) -> (),
     {
+        self.ones.take();
         for i in 0..self.content.len() {
             f(&mut self.content[i], rhs.content[i], rsh.content[i]);
         }
     }
 
     fn set(&mut self, index: usize) {
+        self.ones.take();
         self.content[index / BLOCK_SIZE] |= 1 << (index % BLOCK_SIZE);
     }
 
     fn unset(&mut self, index: usize) {
+        self.ones.take();
         self.content[index / BLOCK_SIZE] &= !(1 << (index % BLOCK_SIZE));
     }
 
@@ -335,5 +335,6 @@ impl BitVec<'_> {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct BitVec<'a> {
+    ones: OnceCell<usize>,
     content: Box<[usize], &'a PoolAlloc>,
 }
