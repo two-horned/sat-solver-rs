@@ -2,6 +2,21 @@ use core::alloc::Allocator;
 use core::cmp::Ordering;
 use core::ptr::{copy, drop_in_place};
 
+impl<T, A: Allocator> BackDrop for Vec<T, A> {
+    type Item = T;
+    unsafe fn back_drop(&mut self, current: usize, consequtives: usize, deleted: usize) {
+        let from = current - consequtives;
+        let src = self.as_ptr().add(from);
+        let dst = self.as_mut_ptr().add(from - deleted);
+        copy(src, dst, consequtives);
+    }
+}
+
+trait BackDrop {
+    type Item;
+    unsafe fn back_drop(&mut self, current: usize, consequtives: usize, deleted: usize);
+}
+
 impl<T, A: Allocator> ExtractIn<T> for Vec<T, A> {
     fn extract_in<F>(&mut self, other: &mut Self, f: F)
     where
@@ -20,10 +35,7 @@ impl<T, A: Allocator> ExtractIn<T> for Vec<T, A> {
                     consequtives += 1;
                 } else {
                     if consequtives != 0 {
-                        let from = j - consequtives;
-                        let src = self.as_ptr().add(from);
-                        let dst = self.as_mut_ptr().add(from - deleted);
-                        copy(src, dst, consequtives);
+                        self.back_drop(j, consequtives, deleted);
                         consequtives = 0;
                     }
                     let cpy = self.as_ptr().add(j).read();
@@ -32,10 +44,7 @@ impl<T, A: Allocator> ExtractIn<T> for Vec<T, A> {
                 }
             }
             if deleted != 0 && consequtives != 0 {
-                let from = len - consequtives;
-                let src = self.as_ptr().add(from);
-                let dst = self.as_mut_ptr().add(from - deleted);
-                copy(src, dst, consequtives);
+                self.back_drop(len, consequtives, deleted);
             }
             self.set_len(len - deleted);
         }
@@ -66,10 +75,7 @@ impl<T, A: Allocator> RetainFrom<T> for Vec<T, A> {
                     consequtives += 1;
                 } else {
                     if consequtives != 0 {
-                        let from = j - consequtives;
-                        let src = self.as_ptr().add(from);
-                        let dst = self.as_mut_ptr().add(from - deleted);
-                        copy(src, dst, consequtives);
+                        self.back_drop(j, consequtives, deleted);
                         consequtives = 0;
                     }
                     drop_in_place(self.as_mut_ptr().add(j));
@@ -78,10 +84,7 @@ impl<T, A: Allocator> RetainFrom<T> for Vec<T, A> {
             }
 
             if deleted != 0 && consequtives != 0 {
-                let from = len - consequtives;
-                let src = self.as_ptr().add(from);
-                let dst = self.as_mut_ptr().add(from - deleted);
-                copy(src, dst, consequtives);
+                self.back_drop(len, consequtives, deleted);
             }
             self.set_len(len - deleted);
         }
