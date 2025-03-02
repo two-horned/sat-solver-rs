@@ -1,369 +1,374 @@
-use core::cmp::Reverse;
-use core::usize;
+use core::alloc::{Allocator, Layout};
+use core::iter;
+use core::mem;
+use core::pin::Pin;
 
-use rand::prelude::*;
+use rand::seq::IndexedRandom;
 
 use crate::alloc::PoolAlloc;
-use crate::data::{create_clause_blocks, Clause};
+use crate::data::{blocks_needed, bytes_needed, Clause};
 use crate::utils::*;
 
+impl Solver {
+    pub fn new(var_numbr: usize, cls_numbr: usize) -> Self {
+        let cls_alloc = {
+            let bytes = bytes_needed(var_numbr);
+            let layout = Layout::from_size_align(bytes * cls_numbr, 32).unwrap();
+            Box::into_raw(Box::new(PoolAlloc::new(
+                layout,
+                100 + var_numbr * cls_numbr,
+            )))
+        };
 
-fn prepare(clauses: &mut Vec<Clause>) {
-  clauses.retain(|x| x.disjoint_switched_self());
+        let vec_alloc = {
+            let layout =
+                Layout::from_size_align(size_of::<Clause<&PoolAlloc>>() * cls_numbr, 32).unwrap();
+            Box::into_raw(Box::new(PoolAlloc::new(
+                layout,
+                100 + var_numbr * cls_numbr,
+            )))
+        };
 
+        let task_todo = Problem::new(var_numbr, cls_numbr, unsafe { &*cls_alloc }, unsafe {
+            &*vec_alloc
+        });
 
-  clauses.sort_by_key(Clause::elements);
-}
-
-
-fn remove_pure_literals(clauses: &mut Vec<Clause>) {
-  if clauses.len() == 0 {
-    return;
-  }
-  let mut acc = clauses[0].clone();
-  for i in 1..clauses.len() {
-    acc.unsafe_zip_clause_in(&clauses[i], |x, y| *x |= y);
-  }
-  let pure_literals = acc.difference_switched_self();
-  clauses.retain(|x| pure_literals.disjoint(x));
-}
-
-
-fn remove_long_clauses(clauses: &mut Vec<Clause>) {
-  while let Some(last) = clauses.last_mut() {
-    if last.elements() >= clauses.len() {
-      clauses.pop();
-    } else {
-      return;
-    }
-  }
-}
-
-
-fn remove_rarest_literal(clauses: &mut Vec<Clause>, a: &PoolAlloc) -> bool {
-  fn fix_clause(clauses: &mut Vec<Clause>, k: usize) {
-    if clauses[k].disjoint_switched_self() {
-      let k = clauses.ascend(k);
-      println!("WTF.");
-      surrender(clauses, k);
-    } else {
-      println!("YEAAAAAAAAAh.");
-      clauses.remove(k);
-    }
-  }
-
-
-  fn work_once(literal: isize, clauses: &mut Vec<Clause>) {
-    let k = clauses.iter().position(|x| x.read(literal)).unwrap();
-    let mut c = clauses.remove(k);
-    c.unset(literal);
-    let to_modify: Box<[usize]> = clauses
-      .iter()
-      .enumerate()
-      .filter_map(|(i, x)| if x.read(-literal) { Some(i) } else { None })
-      .rev()
-      .collect();
-    for i in to_modify {
-      clauses[i].unset(-literal);
-      clauses[i].unsafe_zip_clause_in(&c, |x, y| *x |= y);
-      fix_clause(clauses, i);
-    }
-  }
-
-
-  fn work_twice(literal: isize, clauses: &mut Vec<Clause>) {
-    let mut a: [usize; 4] = [0; 4];
-    a[0] = clauses.iter().position(|x| x.read(literal)).unwrap();
-    a[1] = clauses.iter().skip(a[0]).position(|x| x.read(literal)).unwrap();
-    a[2] = clauses.iter().position(|x| x.read(-literal)).unwrap();
-    a[3] = clauses.iter().skip(a[2]).position(|x| x.read(-literal)).unwrap();
-
-    for i in 0..2 {
-      clauses[i].unset(literal);
-      clauses[i + 2].unset(-literal);
-    }
-
-    let copies: [Clause; 4] = {
-      let u = clauses[a[0]].clone();
-      let v = clauses[a[1]].clone();
-      let w = clauses[a[2]].clone();
-      let x = clauses[a[3]].clone();
-      [u, v, w, x]
-    };
-
-
-    for i in 0..2 {
-      clauses[i].unsafe_zip_clause_in(&copies[i + 1], |x, y| *x |= y);
-      clauses[i + 1].unsafe_zip_clause_in(&copies[i ^ 1], |x, y| *x |= y);
-    }
-
-    a.sort_by_key(|x| Reverse(*x));
-    a.iter().for_each(|&i| fix_clause(clauses, i));
-  }
-
-  if 0 == clauses.len() {
-    return false;
-  }
-
-
-  let len = clauses[0].content_length();
-  let mut once = create_clause_blocks(len, a);
-  let mut twice = create_clause_blocks(len, a);
-  let mut thrice = create_clause_blocks(len, a);
-
-  for clause in &mut *clauses {
-    once.unsafe_zip_clause_in(&clause, |x, y| *x |= y);
-    twice.unsafe_zip3_clause_in(&clause, &once, |x, y, z| *x |= y & z);
-    thrice.unsafe_zip3_clause_in(&clause, &twice, |x, y, z| *x |= y & z);
-  }
-
-  once.unsafe_zip3_clause_in(&twice, &thrice, |x, y, z| *x &= !(y | z));
-  twice.unsafe_zip_clause_in(&thrice, |x, y| *x &= !y);
-
-  match once.iter_literals().next() {
-    | None => (),
-    | Some(x) => {
-      work_once(x, clauses);
-      return true;
-    }
-  }
-
-
-  while let Some(x) = twice.iter_literals().next() {
-    if twice.read(-x) {
-      work_twice(x, clauses);
-      return true;
-    }
-  }
-  false
-}
-
-
-fn resolve(literal: isize, clauses: &mut Vec<Clause>) {
-  clauses.retain(|x| !x.read(literal));
-
-  for i in 0..clauses.len() {
-    let x = &mut clauses[i];
-    if x.read(-literal) {
-      x.unset(-literal);
-      clauses.descend(i);
-    }
-  }
-}
-
-
-fn surrender(clauses: &mut Vec<Clause>, k: usize) {
-  let x = &clauses[k];
-  println!("SURRENDER!!!");
-  if clauses.iter().take(k).find(|y| y.subset_of(x)).is_some() {
-    println!("REMOVE THAT SHII.");
-    clauses.remove(k);
-    return;
-  }
-
-  let x = &clauses[k];
-  for i in 0..k {
-    let y = &clauses[i];
-    let (badness, control) = {
-      let mut difference = y.unsafe_iter_differences(x).take(2);
-      (difference.next(), difference.next())
-    };
-
-    if badness.is_some() && control.is_none() {
-      let badness = badness.unwrap();
-      clauses[k].unset(-badness);
-      let mut k = clauses.descend(k);
-
-      while clauses[k] >= clauses[k + 1] {
-        clauses.swap(k, k + 1);
-        k += 1;
-      }
-
-      println!("Combine that shi..");
-      return surrender(clauses, k);
-    }
-  }
-}
-
-
-fn subjugate(clauses: &mut Vec<Clause>, k: usize) {
-  // Subjugate
-  let current = clauses[k].clone();
-  clauses.retain_from(|x: &Clause| !current.subset_of(x), k + 1);
-
-  // Symmetry ellimination
-  let mut i = k + 1;
-  while i < clauses.len() {
-    let other = &mut clauses[i];
-    let (badness, control) = {
-      let mut difference = current.unsafe_iter_differences(other).take(2);
-      (difference.next(), difference.next())
-    };
-
-    if badness.is_some() && control.is_none() {
-      let badness = badness.unwrap();
-      other.unset(-badness);
-      let mut j = clauses.descend(i);
-      if j < k {
-        if clauses[j] >= current {
-          while j < k {
-            clauses.swap(j, j + 1);
-            j += 1;
-          }
-        } else {
-          subjugate(clauses, j);
+        Self {
+            var_numbr,
+            cls_numbr,
+            cls_alloc,
+            vec_alloc,
+            task_todo,
         }
-      }
     }
-    i += 1
-  }
-}
 
-
-fn combine(clauses: &mut Vec<Clause>) {
-  let mut k = 0;
-  while k + 1 < clauses.len() {
-    subjugate(clauses, k);
-    k += 1;
-  }
-}
-
-
-fn components(mut clauses: Vec<Clause>) -> Vec<Vec<Clause>> {
-  let mut v = Vec::with_capacity(clauses.len());
-  let mut e = Vec::with_capacity(clauses.len());
-  while let Some(x) = clauses.pop() {
-    let mut w = Vec::with_capacity(clauses.len());
-    let mut r = x.variables();
-    w.push(x.clone());
-    loop {
-      e.clear();
-      clauses.extract_in(&mut e, |x| x.unsafe_has_variables(&r));
-      if e.is_empty() {
-        break;
-      }
-      e.iter().for_each(|x| x.unsafe_enrich_variables(&mut r));
-      w.extend_from_slice(&e);
+    pub fn need_to_add(&self) -> bool {
+        self.task_todo.clauses.len() < self.cls_numbr
     }
-    w.sort_by_key(Clause::elements);
-    v.push(w);
-  }
-  v.sort_by(|x, y| usize::cmp(&x.len(), &y.len()));
-  v
-}
 
+    pub fn add_clause(&mut self, literals: Vec<isize>) -> Result<(), SolverError> {
+        let mut new_clause = {
+            let blocks = blocks_needed(self.var_numbr);
+            Clause::new(blocks, unsafe { &*self.cls_alloc })
+        };
 
-fn kernelize(clauses: &mut Vec<Clause>, a: &PoolAlloc) {
-  combine(clauses);
-  loop {
-    let old_length = clauses.len();
-    remove_long_clauses(clauses);
-    remove_pure_literals(clauses);
-    if old_length != clauses.len() {
-      continue;
-    }
-    break;
-  }
-}
-
-
-fn choice(clauses: &Vec<Clause>) -> Option<isize> {
-  let literals: Vec<isize> = clauses[0].iter_literals().collect();
-  literals.choose(&mut rand::rng()).copied()
-}
-
-
-fn guess<'a>(
-  clauses: Vec<Clause>, conflicts: &mut Clause, a: &'a PoolAlloc
-) -> bool {
-  if clauses.is_empty() {
-    return true;
-  }
-  if clauses[0].is_null() {
-    false;
-  }
-  let comps = components(clauses);
-  for mut c in comps {
-    match choice(&c) {
-      | None => return false,
-      | Some(x) => {
-        resolve(x, &mut c);
-        kernelize(&mut c, a);
-        conflicts.set(-x);
-        match guess(c, conflicts, a) {
-          | false => return false,
-          | true => conflicts.unset(-x)
+        for i in literals {
+            if i == 0 {
+                return Err(SolverError::VariableIsZero);
+            }
+            if i.abs() > self.var_numbr as isize {
+                return Err(SolverError::VariableTooLarge(i));
+            }
+            new_clause.set(i);
         }
-      }
+        self.task_todo.clauses.push(new_clause);
+        Ok(())
     }
-  }
-  true
+
+    pub fn solve(&mut self) -> Option<Vec<isize>> {
+        self.task_todo.prepare();
+        self.task_todo.solve()
+    }
 }
 
+pub struct Solver {
+    var_numbr: usize,
+    cls_numbr: usize,
+    cls_alloc: *mut PoolAlloc,
+    vec_alloc: *mut PoolAlloc,
+    task_todo: Problem<&'static PoolAlloc, &'static PoolAlloc>,
+}
 
-pub fn solve_problem<'a>(
-  mut clauses: Vec<Clause<'a>>, a: &'a PoolAlloc
-) -> bool {
-  let mut wrong_guesses = 0;
-  if clauses.len() == 0 {
-    return true;
-  };
-  let len = clauses[0].content_length();
-  prepare(&mut clauses);
-  loop {
-    kernelize(&mut clauses, a);
-    let mut conflicts = create_clause_blocks(len, a);
-    let res = guess(clauses.clone(), &mut conflicts, a);
-    match res {
-      | true => {
-        println!("Wrong guesses: {}", wrong_guesses);
-        return true;
-      }
-      | false => {
-        wrong_guesses += 1;
-        if conflicts.is_null() {
-          println!("Wrong guesses: {}", wrong_guesses);
-          return false;
+impl<A, B> Problem<A, B>
+where
+    A: Allocator + Copy + std::fmt::Debug,
+    B: Allocator + Copy,
+{
+    fn new(vrs: usize, cls: usize, a: A, b: B) -> Self {
+        let blocks = blocks_needed(vrs);
+        Problem {
+            guessed: Clause::new(blocks, a),
+            deduced: Clause::new(blocks, a),
+            clauses: Vec::with_capacity_in(cls, b),
+            recents: Vec::new(),
         }
-        clauses.push(conflicts);
-        clauses.descend(clauses.len() - 1);
-      }
     }
-  }
+
+    fn sort(&mut self) {
+        self.clauses.sort_by_key(Clause::elements)
+    }
+
+    fn descend(&mut self, k: usize) -> usize {
+        self.descend_by_key(k, Clause::elements)
+    }
+
+    fn ascend(&mut self, k: usize) -> usize {
+        self.ascend_by_key(k, Clause::elements)
+    }
+
+    fn subsumption_from(&mut self, k: usize) {
+        let c = self.clauses[k].clone();
+        self.clauses.retain_from(|x| !c.subset_of(x), k + 1)
+    }
+
+    fn count_supersets_of_till(&self, of: usize, till: usize) -> usize {
+        self.count_supersets_of_from_till(of, of + 1, till)
+    }
+
+    fn count_supersets_of_from(&self, of: usize, from: usize) -> usize {
+        let x = &self.clauses[of];
+        self.clauses
+            .iter()
+            .skip(from)
+            .filter(|y| x.subset_of(y))
+            .count()
+    }
+
+    fn count_supersets_of_from_till(&self, of: usize, from: usize, till: usize) -> usize {
+        let x = &self.clauses[of];
+        self.clauses
+            .iter()
+            .take(till + 1)
+            .skip(from)
+            .filter(|y| x.subset_of(y))
+            .count()
+    }
+
+    fn remove_tautologies(&mut self) {
+        self.clauses.retain(Clause::disjoint_switched_self)
+    }
+
+    fn remove_pure_literals(&mut self) {
+        self.clauses
+            .iter()
+            .for_each(|x| self.deduced.unsafe_union_in(x));
+
+        self.deduced = self.deduced.difference_switched_self();
+        self.clauses.retain(|x| self.deduced.disjoint(x));
+    }
+
+    fn remove_long_clauses(&mut self) {
+        while let Some(x) = self.clauses.last() {
+            if x.elements() < self.clauses.len() {
+                return;
+            }
+            self.clauses.pop();
+        }
+    }
+
+    fn combine_from(&mut self, mut k: usize) -> usize {
+        loop {
+            k = self.descend(k);
+            let x = &self.clauses[k];
+            match self
+                .clauses
+                .iter()
+                .take(k)
+                .find_map(|y| y.unsafe_symmetry_in(x))
+            {
+                Some(badness) => {
+                    self.clauses[k].unset(badness);
+                }
+                _ => break,
+            }
+        }
+        k
+    }
+
+    fn choice(&self) -> Option<isize> {
+        let literals: Vec<isize> = self.clauses[0].iter_literals().collect();
+        literals.choose(&mut rand::rng()).copied()
+    }
+
+    fn consume_recents(&mut self) {
+        while let Some(k) = self.recents.pop() {
+            let c = self.clauses[k].clone();
+            let mut i = k;
+            while i < self.clauses.len() {
+                if let Some(badness) = c.unsafe_symmetry_in(&self.clauses[i]) {
+                    i -= self.delete_literal(i, badness);
+                }
+                i += 1;
+            }
+        }
+    }
+
+    fn delete_literal(&mut self, at: usize, literal: isize) -> usize {
+        println!("K is {}", at);
+        println!("deleting {}", literal);
+        self.clauses[at].unset(literal);
+        let k = self.combine_from(at);
+        self.recents
+            .retain(|&x| x > k && !self.clauses[k].subset_of(&self.clauses[x]));
+        println!(
+            "{:?}",
+            iter::zip(
+                self.recents.iter(),
+                self.recents
+                    .iter()
+                    .map(|&x| self.clauses[k].subset_of(&self.clauses[x]))
+            )
+            .collect::<Vec<_>>()
+        );
+        println!(
+            "{:?}",
+            self.clauses
+                .iter()
+                .map(|x| self.clauses[k].subset_of(x))
+                .collect::<Vec<_>>()
+        );
+        let res = {
+            let mut res = 0;
+            let mut r = 0;
+            for i in 0..self.recents.len() {
+                let tmp = self.count_supersets_of_from_till(k, r, self.recents[i]);
+                res += tmp;
+                self.recents[i] -= tmp;
+                r = self.recents[i];
+            }
+            res += self.count_supersets_of_from(k, r);
+            println!("Returning {}", res);
+            res
+        };
+        self.subsumption_from(k);
+        self.recents.push(k);
+        self.recents.descend(self.recents.len() - 1);
+        res - 1
+    }
+
+    fn resolve(&mut self, literal: isize) {
+        self.guessed.set(literal);
+        self.clauses.retain(|x| !x.read(literal));
+        let mut i = 0;
+        while i < self.clauses.len() {
+            if self.clauses[i].read(-literal) {
+                i -= self.delete_literal(i, -literal);
+            }
+            i += 1;
+        }
+        self.consume_recents();
+    }
+
+    fn prepare(&mut self) {
+        self.remove_tautologies();
+        self.sort();
+
+        let mut i = 0;
+        while i < self.clauses.len() {
+            self.subsumption_from(i);
+            i += 1;
+        }
+
+        i = 0;
+        while i < self.clauses.len() {
+            let x = &self.clauses[i];
+            match self
+                .clauses
+                .iter()
+                .take(i)
+                .find_map(|y| y.unsafe_symmetry_in(x))
+            {
+                Some(badness) => i -= self.delete_literal(i, badness),
+                _ => (),
+            }
+            i += 1;
+        }
+        self.consume_recents();
+    }
+
+    fn kernelize(&mut self) {
+        loop {
+            let old_length = self.clauses.len();
+            self.remove_long_clauses();
+            self.remove_pure_literals();
+            if old_length == self.clauses.len() {
+                break;
+            }
+        }
+    }
+
+    fn solve(&mut self) -> Option<Vec<isize>> {
+        println!("ok, solving...");
+        for x in &self.clauses {
+            x.iter_literals().for_each(|y| print!("{} ", y));
+            println!();
+        }
+
+        self.kernelize();
+        if self.clauses.len() == 0 {
+            let mut solution: Vec<_> = self.guessed.iter_literals().collect();
+            solution.sort_by_key(|x| x.abs());
+            return Some(solution);
+        }
+
+        if let Some(c) = self.choice() {
+            let mut copy = self.clone();
+            self.resolve(c);
+            if let Some(r) = self.solve() {
+                return Some(r);
+            }
+            copy.resolve(-c);
+            if let Some(r) = copy.solve() {
+                return Some(r);
+            }
+        }
+        None
+    }
 }
 
+impl<A, B> Descent for Problem<A, B>
+where
+    A: Allocator + Copy + std::fmt::Debug,
+    B: Allocator + Copy,
+{
+    type Item = Clause<A>;
 
-//  fn guess(mut clauses: Vec<Clause>, a: &PoolAlloc) -> bool {
-//      kernelize(&mut clauses, a);
-//      if clauses.is_empty() {
-//          return true;
-//      }
-//      let comps = components(clauses);
-//      //println!("Length of components is {}", comps.len());
+    fn descend_by<F>(&mut self, k: usize, f: F) -> usize
+    where
+        F: Fn(&Self::Item, &Self::Item) -> std::cmp::Ordering,
+    {
+        self.clauses.descend_by(k, f)
+    }
+}
 
+impl<A, B> Ascent for Problem<A, B>
+where
+    A: Allocator + Copy + std::fmt::Debug,
+    B: Allocator + Copy,
+{
+    type Item = Clause<A>;
 
-//      for mut c in comps {
-//          let v = choice(&c);
-//          match v {
-//              None => return false,
-//              Some(x) => {
-//                  let mut d = c.clone();
-//                  resolve(x, &mut c);
-//                  if guess(c, a) {
-//                      continue;
-//                  }
-//                  resolve(-x, &mut d);
-//                  if !guess(d, a) {
-//                      return false;
-//                  }
-//              }
-//          }
-//      }
-//      true
-//  }
+    fn ascend_by<F>(&mut self, k: usize, f: F) -> usize
+    where
+        F: Fn(&Self::Item, &Self::Item) -> std::cmp::Ordering,
+    {
+        self.clauses.ascend_by(k, f)
+    }
+}
 
+#[derive(Clone)]
+struct Problem<A, B>
+where
+    A: Allocator + Copy + std::fmt::Debug,
+    B: Allocator + Copy,
+{
+    guessed: Clause<A>,
+    deduced: Clause<A>,
+    clauses: Vec<Clause<A>, B>,
+    recents: Vec<usize>,
+}
 
-//  pub fn solve_problem(mut clauses: Vec<Clause>, a: &PoolAlloc) -> bool {
-//      prepare(&mut clauses);
-//      guess(clauses, a)
-//  }
+#[derive(Debug)]
+pub enum SolverError {
+    VariableIsZero,
+    VariableTooLarge(isize),
+}
+
+impl Drop for Solver {
+    fn drop(&mut self) {
+        unsafe {
+            Box::from_raw(self.cls_alloc);
+            Box::from_raw(self.vec_alloc);
+        }
+    }
+}

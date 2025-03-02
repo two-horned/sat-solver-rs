@@ -32,6 +32,7 @@ impl Drop for PoolAlloc {
     }
 }
 
+#[derive(Debug)]
 pub struct PoolAlloc {
     objsiz: usize,
     objalg: usize,

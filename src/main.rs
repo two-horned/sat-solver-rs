@@ -1,26 +1,35 @@
 #![feature(allocator_api)]
-use std::alloc::Layout;
 use std::io;
 use std::time::Instant;
 
-use sat_solver::alloc::PoolAlloc;
-use sat_solver::data::{blocks_needed, create_clause_blocks, ParseProblemError, BLOCK_SIZE};
-use sat_solver::solver::solve_problem;
+use sat_solver::solver::Solver;
 
-fn parse_numbers(line: &str) -> Result<Vec<isize>, ParseProblemError> {
+use core::str::FromStr;
+
+fn parse_numbers(line: &str) -> Result<Vec<isize>, <isize as FromStr>::Err> {
     line.trim()
         .split_whitespace()
-        .map(|x| str::parse::<isize>(x).map_err(|_| ParseProblemError::NotANumber(x.to_string())))
+        .map(|x| str::parse::<isize>(x))
         .collect()
 }
 
-fn parse_header(line: String) -> Result<Header, ParseProblemError> {
+#[derive(Debug)]
+enum HeaderParseError {
+    MissingHeader,
+    NegativeNumber(String),
+    NotANumber,
+}
+
+fn parse_header(line: String) -> Result<Header, HeaderParseError> {
     if !line.starts_with("p cnf") {
-        return Err(ParseProblemError::MissingHeader);
+        return Err(HeaderParseError::MissingHeader);
     }
-    let nums = parse_numbers(&line["p cnf".len()..])?;
+    let nums = match parse_numbers(&line["p cnf".len()..]) {
+        Ok(x) => x,
+        Err(_) => return Err(HeaderParseError::NotANumber),
+    };
     if nums.iter().any(|&x| x < 0) {
-        return Err(ParseProblemError::NegativeNumber(line));
+        return Err(HeaderParseError::NegativeNumber(line));
     }
     Ok(Header {
         vrs: nums[0] as usize,
@@ -37,53 +46,46 @@ fn main() -> io::Result<()> {
         if e.starts_with("c") {
             continue;
         }
-        if let Ok(x) = parse_header(e) {
-            h = Some(x);
-            break;
-        } else {
-            return Ok(println!("Incorrect header received."));
+        match parse_header(e) {
+            Ok(x) => {
+                h = Some(x);
+                break;
+            }
+            Err(x) => return Ok(println!("{:?}", x)),
         }
     }
 
     if let Some(header) = h {
-        let len = blocks_needed(header.vrs);
-        let a = {
-            let layout =
-                unsafe { Layout::from_size_align_unchecked(BLOCK_SIZE as usize * len, 32) };
-            PoolAlloc::new(layout, 20 + header.cls * header.vrs)
-        };
-        let mut problem = Vec::with_capacity(header.cls);
-        while problem.len() < header.cls {
-            let mut clause = create_clause_blocks(len, &a);
+        let mut solver = Solver::new(header.vrs, header.cls);
+
+        while solver.need_to_add() {
+            let mut literals = Vec::new();
             for line in io::stdin().lines() {
                 let e = line?;
                 if e.is_empty() {
                     return Ok(println!("Empty lines are disallowed."));
                 }
-                if let Ok(v) = parse_numbers(&e) {
-                    if v.iter().any(|&x| header.vrs < x.abs() as usize) {
-                        return Ok(println!("Literal out of range."));
-                    }
-                    if v.iter().take(v.len() - 1).any(|&x| x == 0) {
-                        return Ok(println!(
-                            "Variables need to have a value greater than zero."
-                        ));
-                    }
+                if let Ok(mut v) = parse_numbers(&e) {
                     if v[v.len() - 1] == 0 {
-                        v.iter().take(v.len() - 1).for_each(|&x| clause.set(x));
+                        v.pop();
+                        literals.extend(v);
                         break;
                     } else {
-                        v.iter().take(v.len() - 1).for_each(|&x| clause.set(x));
+                        literals.extend(v);
                     }
                 } else {
                     return Ok(println!("Incorrect clause formulation."));
                 }
             }
-            problem.push(clause);
+
+            match solver.add_clause(literals) {
+                Err(x) => return Ok(println!("{:?}", x)),
+                _ => (),
+            }
         }
         let start = Instant::now();
         println!("Solving problem...");
-        println!("Solution is {}", solve_problem(problem, &a));
+        println!("Solution is {:?}", solver.solve());
         println!("Time spent is {}ms", start.elapsed().as_millis());
         return Ok(println!("Bye."));
     }
