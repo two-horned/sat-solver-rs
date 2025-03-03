@@ -107,14 +107,13 @@ where
     where
         A: Allocator,
     {
-        for i in 0..vrs.content.len() {
-            vrs.content[i] |= self.pos.content[i] | self.neg.content[i];
-        }
+        (0..vrs.content.len())
+            .for_each(|i| vrs.content[i] |= self.pos.content[i] | self.neg.content[i]);
     }
 
     pub(crate) fn unsafe_has_variables(&self, vrs: &BitVec<A>) -> bool {
         (0..vrs.content.len())
-            .any(|i| 0 != (self.pos.content[i] | self.neg.content[i]) & vrs.content[i])
+            .any(|i| (self.pos.content[i] | self.neg.content[i]) & vrs.content[i] != 0)
     }
 
     pub(crate) fn disjoint(&self, rhs: &Self) -> bool {
@@ -257,7 +256,7 @@ where
         F: Fn(usize, usize) -> usize,
     {
         let mut res = Self::new(self.content.len(), *Box::allocator(&self.content));
-        res.unsafe_zip_bits_in(rhs, |x, y| *x = f(*x, y));
+        (0..self.content.len()).for_each(|i| res.content[i] = f(self.content[i], rhs.content[i]));
         res
     }
 

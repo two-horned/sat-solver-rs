@@ -1,10 +1,11 @@
 use core::alloc::{Allocator, Layout};
-
-use rand::seq::IndexedRandom;
+use std::iter::FusedIterator;
 
 use crate::alloc::PoolAlloc;
 use crate::data::{blocks_needed, bytes_needed, Clause};
 use crate::utils::*;
+use core::iter::Iterator;
+use rand::seq::IndexedRandom;
 
 impl Solver {
     pub fn new(var_numbr: usize, cls_numbr: usize) -> Self {
@@ -224,7 +225,6 @@ where
             let mut res = 0;
             let mut r = k + 1;
             for i in 0..self.recents.len() {
-                assert!(self.recents[i] != k, "'Recents' has duplicate entry");
                 if self.recents[i] <= k + 1 {
                     continue;
                 }
@@ -293,24 +293,36 @@ where
 
     fn solve(&mut self) -> Option<Vec<isize>> {
         self.kernelize();
-        if self.clauses.len() == 0 {
-            let mut solution: Vec<_> = self.guessed.iter_literals().collect();
-            solution.sort_by_key(|x| x.abs());
-            return Some(solution);
+        let len = self.clauses.len();
+        let comps = {
+            let mut tmp: Vec<_> = ComponentsIter::new(self).collect();
+            tmp.sort_by_key(|x| x.clauses.len());
+            tmp
+        };
+        //let comps: Vec<_> = vec![self.clone()];
+
+        for mut comp in comps {
+            let c = comp.choice()?;
+            let mut copy = comp.clone();
+            comp.resolve(c);
+            if comp.solve().is_some() {
+                self.guessed.unsafe_union_in(&comp.guessed);
+                self.deduced.unsafe_union_in(&comp.deduced);
+                continue;
+            }
+
+            copy.resolve(-c);
+            if copy.solve().is_some() {
+                self.guessed.unsafe_union_in(&copy.guessed);
+                self.deduced.unsafe_union_in(&copy.deduced);
+                continue;
+            }
+            return None;
         }
 
-        if let Some(c) = self.choice() {
-            let mut copy = self.clone();
-            self.resolve(c);
-            if let Some(r) = self.solve() {
-                return Some(r);
-            }
-            copy.resolve(-c);
-            if let Some(r) = copy.solve() {
-                return Some(r);
-            }
-        }
-        None
+        let mut solution: Vec<_> = self.guessed.iter_literals().collect();
+        solution.sort_by_key(|x| x.abs());
+        Some(solution)
     }
 }
 
@@ -372,4 +384,65 @@ impl Drop for Solver {
             let _ = Box::from_raw(self.vec_alloc);
         }
     }
+}
+
+impl<'a, A, B> FusedIterator for ComponentsIter<'a, A, B>
+where
+    A: Allocator + Copy,
+    B: Allocator + Copy,
+{
+}
+
+impl<'a, A, B> Iterator for ComponentsIter<'a, A, B>
+where
+    A: Allocator + Copy,
+    B: Allocator + Copy,
+{
+    type Item = Problem<A, B>;
+    fn next(&mut self) -> Option<Self::Item> {
+        let x = self.problem.clauses.pop()?;
+        let b = *Vec::allocator(&self.problem.clauses);
+        let mut v = Vec::with_capacity_in(self.problem.clauses.capacity(), b);
+        let mut e = Vec::with_capacity_in(self.problem.clauses.capacity(), b);
+        let mut r = x.variables();
+        v.push(x);
+        loop {
+            self.problem
+                .clauses
+                .extract_in(&mut e, |x| x.unsafe_has_variables(&r));
+            if e.is_empty() {
+                break;
+            }
+            e.iter().for_each(|x| x.unsafe_enrich_variables(&mut r));
+            while let Some(x) = e.pop() {
+                v.push(x);
+            }
+        }
+
+        v.sort_by_key(Clause::len);
+        return Some(Problem {
+            guessed: self.problem.guessed.clone(),
+            deduced: self.problem.deduced.clone(),
+            clauses: v,
+            recents: self.problem.recents.clone(),
+        });
+    }
+}
+
+impl<A, B> ComponentsIter<'_, A, B>
+where
+    A: Allocator + Copy,
+    B: Allocator + Copy,
+{
+    fn new<'a>(problem: &'a mut Problem<A, B>) -> ComponentsIter<'a, A, B> {
+        ComponentsIter { problem }
+    }
+}
+
+struct ComponentsIter<'a, A, B>
+where
+    A: Allocator + Copy,
+    B: Allocator + Copy,
+{
+    problem: &'a mut Problem<A, B>,
 }
