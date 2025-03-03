@@ -1,5 +1,4 @@
 use core::alloc::{Allocator, Layout};
-use core::iter;
 
 use rand::seq::IndexedRandom;
 
@@ -27,7 +26,7 @@ impl Solver {
             )))
         };
 
-        let task_todo = Ok(Problem::new(
+        let work_onto = Task::Todo(Problem::new(
             var_numbr,
             cls_numbr,
             unsafe { &*cls_alloc },
@@ -39,20 +38,20 @@ impl Solver {
             cls_numbr,
             cls_alloc,
             vec_alloc,
-            task_todo,
+            work_onto,
         }
     }
 
     pub fn need_to_add(&self) -> bool {
-        match &self.task_todo {
-            Ok(x) => x.clauses.len() < self.cls_numbr,
+        match &self.work_onto {
+            Task::Todo(x) => x.clauses.len() < self.cls_numbr,
             _ => false,
         }
     }
 
     pub fn add_clause(&mut self, literals: Vec<isize>) -> Result<(), SolverError> {
-        match &mut self.task_todo {
-            Ok(x) if x.clauses.len() < self.cls_numbr => {
+        match &mut self.work_onto {
+            Task::Todo(x) if x.clauses.len() < self.cls_numbr => {
                 let mut new_clause = {
                     let blocks = blocks_needed(self.var_numbr);
                     Clause::new(blocks, unsafe { &*self.cls_alloc })
@@ -75,14 +74,17 @@ impl Solver {
     }
 
     pub fn solve(&mut self) -> Result<Option<Vec<isize>>, SolverError> {
-        match &mut self.task_todo {
-            Err(x) => Ok(x.clone()),
-            Ok(x) if x.clauses.len() < self.cls_numbr => Err(SolverError::TooFewClauses),
-            Ok(x) => {
-                x.prepare();
-                let res = x.solve();
-                self.task_todo = Err(res.clone());
-                Ok(res)
+        match &mut self.work_onto {
+            Task::Done(x) => Ok(x.clone()),
+            Task::Todo(x) => {
+                if x.clauses.len() < self.cls_numbr {
+                    Err(SolverError::TooFewClauses)
+                } else {
+                    x.prepare();
+                    let res = x.solve();
+                    self.work_onto = Task::Done(res.clone());
+                    Ok(res)
+                }
             }
         }
     }
@@ -93,7 +95,12 @@ pub struct Solver {
     cls_numbr: usize,
     cls_alloc: *mut PoolAlloc,
     vec_alloc: *mut PoolAlloc,
-    task_todo: Result<Problem<&'static PoolAlloc, &'static PoolAlloc>, Option<Vec<isize>>>,
+    work_onto: Task<Problem<&'static PoolAlloc, &'static PoolAlloc>, Option<Vec<isize>>>,
+}
+
+enum Task<A, B> {
+    Todo(A),
+    Done(B),
 }
 
 impl<A, B> Problem<A, B>
@@ -359,7 +366,7 @@ pub enum SolverError {
 
 impl Drop for Solver {
     fn drop(&mut self) {
-        self.task_todo = Err(None);
+        self.work_onto = Task::Done(None);
         unsafe {
             let _ = Box::from_raw(self.cls_alloc);
             let _ = Box::from_raw(self.vec_alloc);
