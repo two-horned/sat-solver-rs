@@ -113,12 +113,8 @@ where
     }
 
     pub(crate) fn unsafe_has_variables(&self, vrs: &BitVec<A>) -> bool {
-        for i in 0..vrs.content.len() {
-            if 0 != (self.pos.content[i] | self.neg.content[i]) & vrs.content[i] {
-                return true;
-            }
-        }
-        false
+        (0..vrs.content.len())
+            .any(|i| 0 != (self.pos.content[i] | self.neg.content[i]) & vrs.content[i])
     }
 
     pub(crate) fn disjoint(&self, rhs: &Self) -> bool {
@@ -244,9 +240,7 @@ where
     where
         F: Fn(usize, usize) -> usize,
     {
-        self.content
-            .iter()
-            .zip(rhs.content.iter())
+        iter::zip(&self.content, &rhs.content)
             .enumerate()
             .flat_map(move |(i, (&x, &y))| IterOne::new(f(x, y)).map(move |z| i * BLOCK_SIZE + z))
     }
@@ -302,19 +296,11 @@ where
     }
 
     fn subset_of(&self, rhs: &Self) -> bool {
-        self.content
-            .iter()
-            .zip(rhs.content.iter())
-            .all(|(x, y)| x & !y == 0)
+        iter::zip(&self.content, &rhs.content).all(|(&x, &y)| x & !y == 0)
     }
 
     fn disjoint(&self, rhs: &Self) -> bool {
-        for i in 0..usize::min(self.content.len(), rhs.content.len()) {
-            if self.content[i] & rhs.content[i] != 0 {
-                return false;
-            }
-        }
-        true
+        iter::zip(&self.content, &rhs.content).all(|(&x, &y)| x & y == 0)
     }
 }
 
