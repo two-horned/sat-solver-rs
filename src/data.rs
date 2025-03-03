@@ -3,11 +3,13 @@ use core::cell::OnceCell;
 use core::iter::{self, FusedIterator};
 use core::usize;
 
-pub(crate) const BLOCK_SIZE: usize = usize::BITS as usize;
-pub(crate) const BLOCK_BYTE: usize = size_of::<usize>();
+const BLOCK_SIZE: usize = usize::BITS as usize;
+const BLOCK_BYTE: usize = size_of::<usize>();
+
 pub(crate) const fn bytes_needed(vrs: usize) -> usize {
-    blocks_needed(vrs) * BLOCK_SIZE
+    blocks_needed(vrs) * BLOCK_BYTE
 }
+
 pub(crate) const fn blocks_needed(vrs: usize) -> usize {
     vrs / BLOCK_SIZE + if vrs % BLOCK_SIZE == 0 { 0 } else { 1 }
 }
@@ -26,7 +28,7 @@ where
         }
     }
 
-    pub(crate) fn elements(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.pos.ones() + self.neg.ones()
     }
 

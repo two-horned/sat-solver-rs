@@ -1,7 +1,5 @@
 use core::alloc::{Allocator, Layout};
 use core::iter;
-use core::mem;
-use core::pin::Pin;
 
 use rand::seq::IndexedRandom;
 
@@ -29,9 +27,12 @@ impl Solver {
             )))
         };
 
-        let task_todo = Problem::new(var_numbr, cls_numbr, unsafe { &*cls_alloc }, unsafe {
-            &*vec_alloc
-        });
+        let task_todo = Ok(Problem::new(
+            var_numbr,
+            cls_numbr,
+            unsafe { &*cls_alloc },
+            unsafe { &*vec_alloc },
+        ));
 
         Self {
             var_numbr,
@@ -43,31 +44,47 @@ impl Solver {
     }
 
     pub fn need_to_add(&self) -> bool {
-        self.task_todo.clauses.len() < self.cls_numbr
+        match &self.task_todo {
+            Ok(x) => x.clauses.len() < self.cls_numbr,
+            _ => false,
+        }
     }
 
     pub fn add_clause(&mut self, literals: Vec<isize>) -> Result<(), SolverError> {
-        let mut new_clause = {
-            let blocks = blocks_needed(self.var_numbr);
-            Clause::new(blocks, unsafe { &*self.cls_alloc })
-        };
+        match &mut self.task_todo {
+            Ok(x) if x.clauses.len() < self.cls_numbr => {
+                let mut new_clause = {
+                    let blocks = blocks_needed(self.var_numbr);
+                    Clause::new(blocks, unsafe { &*self.cls_alloc })
+                };
 
-        for i in literals {
-            if i == 0 {
-                return Err(SolverError::VariableIsZero);
+                for i in literals {
+                    if i == 0 {
+                        return Err(SolverError::VariableIsZero);
+                    }
+                    if i.abs() > self.var_numbr as isize {
+                        return Err(SolverError::VariableTooLarge(i));
+                    }
+                    new_clause.set(i);
+                }
+                x.clauses.push(new_clause);
+                Ok(())
             }
-            if i.abs() > self.var_numbr as isize {
-                return Err(SolverError::VariableTooLarge(i));
-            }
-            new_clause.set(i);
+            _ => Err(SolverError::TooManyClauses),
         }
-        self.task_todo.clauses.push(new_clause);
-        Ok(())
     }
 
-    pub fn solve(&mut self) -> Option<Vec<isize>> {
-        self.task_todo.prepare();
-        self.task_todo.solve()
+    pub fn solve(&mut self) -> Result<Option<Vec<isize>>, SolverError> {
+        match &mut self.task_todo {
+            Err(x) => Ok(x.clone()),
+            Ok(x) if x.clauses.len() < self.cls_numbr => Err(SolverError::TooFewClauses),
+            Ok(x) => {
+                x.prepare();
+                let res = x.solve();
+                self.task_todo = Err(res.clone());
+                Ok(res)
+            }
+        }
     }
 }
 
@@ -76,12 +93,12 @@ pub struct Solver {
     cls_numbr: usize,
     cls_alloc: *mut PoolAlloc,
     vec_alloc: *mut PoolAlloc,
-    task_todo: Problem<&'static PoolAlloc, &'static PoolAlloc>,
+    task_todo: Result<Problem<&'static PoolAlloc, &'static PoolAlloc>, Option<Vec<isize>>>,
 }
 
 impl<A, B> Problem<A, B>
 where
-    A: Allocator + Copy + std::fmt::Debug,
+    A: Allocator + Copy,
     B: Allocator + Copy,
 {
     fn new(vrs: usize, cls: usize, a: A, b: B) -> Self {
@@ -95,15 +112,15 @@ where
     }
 
     fn sort(&mut self) {
-        self.clauses.sort_by_key(Clause::elements)
+        self.clauses.sort_by_key(Clause::len)
     }
 
     fn descend(&mut self, k: usize) -> usize {
-        self.descend_by_key(k, Clause::elements)
+        self.descend_by_key(k, Clause::len)
     }
 
     fn ascend(&mut self, k: usize) -> usize {
-        self.ascend_by_key(k, Clause::elements)
+        self.ascend_by_key(k, Clause::len)
     }
 
     fn subsumption_from(&mut self, k: usize) {
@@ -142,14 +159,13 @@ where
         self.clauses
             .iter()
             .for_each(|x| self.deduced.unsafe_union_in(x));
-
         self.deduced = self.deduced.difference_switched_self();
         self.clauses.retain(|x| self.deduced.disjoint(x));
     }
 
     fn remove_long_clauses(&mut self) {
         while let Some(x) = self.clauses.last() {
-            if x.elements() < self.clauses.len() {
+            if x.len() < self.clauses.len() {
                 return;
             }
             self.clauses.pop();
@@ -166,13 +182,10 @@ where
                 .take(k)
                 .find_map(|y| y.unsafe_symmetry_in(x))
             {
-                Some(badness) => {
-                    self.clauses[k].unset(badness);
-                }
-                _ => break,
+                Some(badness) => self.clauses[k].unset(badness),
+                _ => return k,
             }
         }
-        k
     }
 
     fn choice(&self) -> Option<isize> {
@@ -194,46 +207,30 @@ where
     }
 
     fn delete_literal(&mut self, at: usize, literal: isize) -> usize {
-        println!("K is {}", at);
-        println!("deleting {}", literal);
         self.clauses[at].unset(literal);
         let k = self.combine_from(at);
         self.recents
             .retain(|&x| x > k && !self.clauses[k].subset_of(&self.clauses[x]));
-        println!(
-            "{:?}",
-            iter::zip(
-                self.recents.iter(),
-                self.recents
-                    .iter()
-                    .map(|&x| self.clauses[k].subset_of(&self.clauses[x]))
-            )
-            .collect::<Vec<_>>()
-        );
-        println!(
-            "{:?}",
-            self.clauses
-                .iter()
-                .map(|x| self.clauses[k].subset_of(x))
-                .collect::<Vec<_>>()
-        );
-        let res = {
+        let res = self.count_supersets_of_till(k, at);
+
+        {
             let mut res = 0;
-            let mut r = 0;
+            let mut r = k + 1;
             for i in 0..self.recents.len() {
-                let tmp = self.count_supersets_of_from_till(k, r, self.recents[i]);
-                res += tmp;
-                self.recents[i] -= tmp;
+                assert!(self.recents[i] != k, "'Recents' has duplicate entry");
+                if self.recents[i] <= k + 1 {
+                    continue;
+                }
+                res += self.count_supersets_of_from_till(k, r, self.recents[i]);
+                self.recents[i] -= res;
                 r = self.recents[i];
             }
-            res += self.count_supersets_of_from(k, r);
-            println!("Returning {}", res);
-            res
-        };
+        }
+
         self.subsumption_from(k);
         self.recents.push(k);
         self.recents.descend(self.recents.len() - 1);
-        res - 1
+        res
     }
 
     fn resolve(&mut self, literal: isize) {
@@ -288,12 +285,6 @@ where
     }
 
     fn solve(&mut self) -> Option<Vec<isize>> {
-        println!("ok, solving...");
-        for x in &self.clauses {
-            x.iter_literals().for_each(|y| print!("{} ", y));
-            println!();
-        }
-
         self.kernelize();
         if self.clauses.len() == 0 {
             let mut solution: Vec<_> = self.guessed.iter_literals().collect();
@@ -318,7 +309,7 @@ where
 
 impl<A, B> Descent for Problem<A, B>
 where
-    A: Allocator + Copy + std::fmt::Debug,
+    A: Allocator + Copy,
     B: Allocator + Copy,
 {
     type Item = Clause<A>;
@@ -333,7 +324,7 @@ where
 
 impl<A, B> Ascent for Problem<A, B>
 where
-    A: Allocator + Copy + std::fmt::Debug,
+    A: Allocator + Copy,
     B: Allocator + Copy,
 {
     type Item = Clause<A>;
@@ -349,7 +340,7 @@ where
 #[derive(Clone)]
 struct Problem<A, B>
 where
-    A: Allocator + Copy + std::fmt::Debug,
+    A: Allocator + Copy,
     B: Allocator + Copy,
 {
     guessed: Clause<A>,
@@ -362,13 +353,16 @@ where
 pub enum SolverError {
     VariableIsZero,
     VariableTooLarge(isize),
+    TooManyClauses,
+    TooFewClauses,
 }
 
 impl Drop for Solver {
     fn drop(&mut self) {
+        self.task_todo = Err(None);
         unsafe {
-            Box::from_raw(self.cls_alloc);
-            Box::from_raw(self.vec_alloc);
+            let _ = Box::from_raw(self.cls_alloc);
+            let _ = Box::from_raw(self.vec_alloc);
         }
     }
 }
