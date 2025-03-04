@@ -1,4 +1,4 @@
-#![feature(allocator_api, alloc_layout_extra, iter_chain)]
+#![feature(allocator_api, alloc_layout_extra, iter_chain, ptr_metadata)]
 
 pub mod alloc;
 pub mod data;

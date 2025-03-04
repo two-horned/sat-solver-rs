@@ -1,6 +1,5 @@
 use core::alloc::{AllocError, Allocator, Layout};
-use core::ptr::NonNull;
-use core::slice;
+use core::ptr::{self, NonNull};
 use std::alloc::{alloc, dealloc};
 use std::sync::Mutex;
 
@@ -49,8 +48,8 @@ unsafe impl Allocator for PoolAlloc {
         }
         let mut frptrs = self.frptrs.lock().unwrap();
         if let Some(start) = frptrs.pop() {
-            let slice = unsafe { slice::from_raw_parts_mut(start, size) };
-            return Ok(unsafe { NonNull::new_unchecked(slice) });
+            let ptr = ptr::from_raw_parts_mut(start, size);
+            return Ok(unsafe { NonNull::new_unchecked(ptr) });
         }
         Err(AllocError)
     }
