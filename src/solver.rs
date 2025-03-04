@@ -11,20 +11,17 @@ impl Solver {
     pub fn new(var_numbr: usize, cls_numbr: usize) -> Self {
         let cls_alloc = {
             let bytes = bytes_needed(var_numbr);
-            let layout = Layout::from_size_align(bytes * cls_numbr, 32).unwrap();
+            let layout = Layout::from_size_align(bytes, 32).unwrap();
             Box::into_raw(Box::new(PoolAlloc::new(
                 layout,
-                100 + var_numbr * cls_numbr,
+                100 + var_numbr * cls_numbr * 2,
             )))
         };
 
         let vec_alloc = {
-            let layout =
-                Layout::from_size_align(size_of::<Clause<&PoolAlloc>>() * cls_numbr, 32).unwrap();
-            Box::into_raw(Box::new(PoolAlloc::new(
-                layout,
-                100 + var_numbr * cls_numbr,
-            )))
+            let bytes = size_of::<Clause<&PoolAlloc>>() * cls_numbr;
+            let layout = Layout::from_size_align(bytes, 32).unwrap();
+            Box::into_raw(Box::new(PoolAlloc::new(layout, 100 + var_numbr)))
         };
 
         let work_onto = Task::Todo(Problem::new(
@@ -33,7 +30,6 @@ impl Solver {
             unsafe { &*cls_alloc },
             unsafe { &*vec_alloc },
         ));
-
         Self {
             var_numbr,
             cls_numbr,
@@ -138,15 +134,6 @@ where
 
     fn count_supersets_of_till(&self, of: usize, till: usize) -> usize {
         self.count_supersets_of_from_till(of, of + 1, till)
-    }
-
-    fn count_supersets_of_from(&self, of: usize, from: usize) -> usize {
-        let x = &self.clauses[of];
-        self.clauses
-            .iter()
-            .skip(from)
-            .filter(|y| x.subset_of(y))
-            .count()
     }
 
     fn count_supersets_of_from_till(&self, of: usize, from: usize, till: usize) -> usize {
@@ -293,13 +280,20 @@ where
 
     fn solve(&mut self) -> Option<Vec<isize>> {
         self.kernelize();
-        let len = self.clauses.len();
+        if self.clauses.len() == 0 {
+            let mut solution: Vec<_> = self.guessed.iter_literals().collect();
+            solution.sort_by_key(|x| x.abs());
+            return Some(solution);
+        }
+        if self.clauses.len() == 1 {
+            return None;
+        }
+
         let comps = {
             let mut tmp: Vec<_> = ComponentsIter::new(self).collect();
             tmp.sort_by_key(|x| x.clauses.len());
             tmp
         };
-        //let comps: Vec<_> = vec![self.clone()];
 
         for mut comp in comps {
             let c = comp.choice()?;
