@@ -14,7 +14,7 @@ impl Solver {
             let layout = Layout::from_size_align(bytes, 32).unwrap();
             Box::into_raw(Box::new(PoolAlloc::new(
                 layout,
-                100 + var_numbr * cls_numbr * 2,
+                100 + var_numbr * cls_numbr,
             )))
         };
 
@@ -249,7 +249,6 @@ where
             self.subsumption_from(i);
             i += 1;
         }
-
         i = 0;
         while i < self.clauses.len() {
             let x = &self.clauses[i];

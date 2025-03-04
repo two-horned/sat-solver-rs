@@ -7,7 +7,7 @@ const BLOCK_SIZE: usize = usize::BITS as usize;
 const BLOCK_BYTE: usize = size_of::<usize>();
 
 pub(crate) const fn bytes_needed(vrs: usize) -> usize {
-    blocks_needed(vrs) * BLOCK_BYTE
+    2 * blocks_needed(vrs) * BLOCK_BYTE
 }
 
 pub(crate) const fn blocks_needed(vrs: usize) -> usize {
@@ -22,32 +22,33 @@ where
     where
         A: Allocator,
     {
-        Self {
-            pos: BitVec::new(blocks, a),
-            neg: BitVec::new(blocks, a),
-        }
+        Self(BitVec::new(blocks * 2, a))
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.pos.ones() + self.neg.ones()
+        self.0.ones()
+    }
+
+    const fn half_cap(&self) -> usize {
+        self.0.content.len() / 2
+    }
+
+    const fn half_idx(&self, i: usize) -> usize {
+        self.half_cap() + i
     }
 
     pub(crate) fn zip_clause<F>(&self, rhs: &Self, f: F) -> Self
     where
         F: Fn(usize, usize) -> usize,
     {
-        Self {
-            pos: self.pos.zip_bits(&rhs.pos, &f),
-            neg: self.neg.zip_bits(&rhs.pos, f),
-        }
+        Self(BitVec::zip_bits(&self.0, &rhs.0, f))
     }
 
     pub(crate) fn unsafe_zip_clause_in<F>(&mut self, rhs: &Self, f: F)
     where
         F: Fn(&mut usize, usize) -> (),
     {
-        self.pos.unsafe_zip_bits_in(&rhs.pos, &f);
-        self.neg.unsafe_zip_bits_in(&rhs.neg, f);
+        BitVec::unsafe_zip_bits_in(&mut self.0, &rhs.0, f);
     }
 
     pub(crate) fn unsafe_union_in(&mut self, rhs: &Self) {
@@ -58,49 +59,52 @@ where
     where
         F: Fn(&mut usize, usize, usize) -> (),
     {
-        self.pos.unsafe_zip3_bits_in(&rhs.pos, &rsh.pos, &f);
-        self.neg.unsafe_zip3_bits_in(&rhs.neg, &rsh.neg, &f);
+        BitVec::unsafe_zip3_bits_in(&mut self.0, &rhs.0, &rsh.0, f);
     }
 
     pub(crate) fn subset_of(&self, rhs: &Self) -> bool {
-        self.pos.subset_of(&rhs.pos) && self.neg.subset_of(&rhs.neg)
+        BitVec::subset_of(&self.0, &rhs.0)
     }
 
     pub(crate) fn difference_switched_self(&self) -> Self {
-        let pos = self.pos.zip_bits(&self.neg, |x, y| x & !y);
-        let neg = self.neg.zip_bits(&self.pos, |x, y| x & !y);
-        Self { pos, neg }
+        let mut res = Self(BitVec::new(
+            self.0.content.len(),
+            *Box::allocator(&self.0.content),
+        ));
+        (0..self.half_cap()).for_each(|i| {
+            res.0.content[i] = self.0.content[i] & !self.0.content[self.half_idx(i)];
+            res.0.content[self.half_idx(i)] = self.0.content[self.half_idx(i)] & !self.0.content[i];
+        });
+        res
     }
 
-    pub(crate) fn read(&self, index: isize) -> bool {
+    const fn true_idx(&self, index: isize) -> usize {
         if index < 0 {
-            self.neg.read(-index as usize - 1)
-        } else {
-            self.pos.read(index as usize - 1)
+            return -index as usize - 1 + self.half_cap() * BLOCK_SIZE;
         }
+        index as usize - 1
+    }
+
+    pub(crate) const fn read(&self, index: isize) -> bool {
+        self.0.read(self.true_idx(index))
     }
 
     pub(crate) fn set(&mut self, index: isize) {
-        if index < 0 {
-            self.neg.set(-index as usize - 1)
-        } else {
-            self.pos.set(index as usize - 1)
-        }
+        self.0.set(self.true_idx(index));
     }
 
     pub(crate) fn unset(&mut self, index: isize) {
-        if index < 0 {
-            self.neg.unset(-index as usize - 1)
-        } else {
-            self.pos.unset(index as usize - 1)
-        }
+        self.0.unset(self.true_idx(index));
     }
 
     pub(crate) fn variables(&self) -> BitVec<A>
     where
         A: Allocator,
     {
-        self.pos.zip_bits(&self.neg, |x, y| x | y)
+        let mut res = BitVec::new(self.half_cap(), *Box::allocator(&self.0.content));
+        (0..self.half_cap())
+            .for_each(|i| res.content[i] = self.0.content[i] | self.0.content[self.half_idx(i)]);
+        res
     }
 
     pub(crate) fn unsafe_enrich_variables(&self, vrs: &mut BitVec<A>)
@@ -108,34 +112,38 @@ where
         A: Allocator,
     {
         (0..vrs.content.len())
-            .for_each(|i| vrs.content[i] |= self.pos.content[i] | self.neg.content[i]);
+            .for_each(|i| vrs.content[i] |= self.0.content[i] | self.0.content[self.half_idx(i)]);
     }
 
     pub(crate) fn unsafe_has_variables(&self, vrs: &BitVec<A>) -> bool {
         (0..vrs.content.len())
-            .any(|i| (self.pos.content[i] | self.neg.content[i]) & vrs.content[i] != 0)
+            .any(|i| (self.0.content[i] | self.0.content[self.half_idx(i)]) & vrs.content[i] != 0)
     }
 
     pub(crate) fn disjoint(&self, rhs: &Self) -> bool {
-        self.pos.disjoint(&rhs.pos) && self.neg.disjoint(&rhs.neg)
+        BitVec::disjoint(&self.0, &rhs.0)
     }
 
     pub(crate) fn disjoint_switched_self(&self) -> bool {
-        self.pos.disjoint(&self.neg)
+        (0..self.half_cap()).all(|i| self.0.content[i] & self.0.content[self.half_idx(i)] == 0)
     }
 
-    pub(crate) fn capacity(&self) -> usize {
-        BLOCK_SIZE * self.pos.content.len()
-    }
+    //  pub(crate) fn capacity(&self) -> usize {
+    //      BLOCK_SIZE * self.half_len()
+    //  }
 
-    pub(crate) fn content_length(&self) -> usize {
-        self.pos.content.len()
-    }
+    //  pub(crate) fn content_length(&self) -> usize {
+    //      self.pos.content.len()
+    //  }
+
+    //  pub(crate) fn is_null(&self) -> bool {
+    //      self.pos.is_null() && self.neg.is_null()
+    //  }
 
     pub(crate) fn iter_literals(&self) -> impl Iterator<Item = isize> + use<'_, A> {
         iter::chain(
-            self.pos.iter_ones().map(|x| x as isize + 1),
-            self.neg.iter_ones().map(|x| -(1 + x as isize)),
+            iter_ones(self.0.content[..self.half_cap()].iter().copied()).map(|x| x as isize + 1),
+            iter_ones(self.0.content[self.half_cap()..].iter().copied()).map(|x| -(1 + x as isize)),
         )
     }
 
@@ -144,12 +152,22 @@ where
         rhs: &'b Self,
     ) -> impl Iterator<Item = isize> + use<'_, 'b, A> {
         iter::chain(
-            self.pos
-                .unsafe_iter_bin_op(&rhs.pos, |x, y| x & !y)
-                .map(|x| x as isize + 1),
-            self.neg
-                .unsafe_iter_bin_op(&rhs.neg, |x, y| x & !y)
-                .map(|x| -(1 + x as isize)),
+            iter_ones(
+                iter::zip(
+                    &self.0.content[..self.half_cap()],
+                    &rhs.0.content[..self.half_cap()],
+                )
+                .map(|(&x, &y)| x & !y),
+            )
+            .map(|x| x as isize + 1),
+            iter_ones(
+                iter::zip(
+                    &self.0.content[self.half_cap()..],
+                    &rhs.0.content[self.half_cap()..],
+                )
+                .map(|(&x, &y)| x & !y),
+            )
+            .map(|x| -(x as isize + 1)),
         )
     }
 
@@ -163,20 +181,12 @@ where
         }
         None
     }
-
-    pub(crate) fn is_null(&self) -> bool {
-        self.pos.is_null() && self.neg.is_null()
-    }
 }
 
 #[derive(Clone)]
-pub(crate) struct Clause<A>
+pub(crate) struct Clause<A>(BitVec<A>)
 where
-    A: Allocator + Copy,
-{
-    pub(crate) pos: BitVec<A>,
-    pub(crate) neg: BitVec<A>,
-}
+    A: Allocator + Copy;
 
 impl IterOne {
     fn new(num: usize) -> Self {
@@ -244,12 +254,9 @@ where
             .flat_map(move |(i, (&x, &y))| IterOne::new(f(x, y)).map(move |z| i * BLOCK_SIZE + z))
     }
 
-    fn iter_ones(&self) -> impl Iterator<Item = usize> + use<'_, A> {
-        self.content
-            .iter()
-            .enumerate()
-            .flat_map(|(i, &x)| IterOne::new(x).map(move |y| i * BLOCK_SIZE + y))
-    }
+    //  fn iter_ones(&self) -> impl Iterator<Item = usize> + use<'_, A> {
+    //      self.content.iter_ones()
+    //  }
 
     fn zip_bits<F>(&self, rhs: &Self, f: F) -> Self
     where
@@ -290,7 +297,7 @@ where
         self.content[index / BLOCK_SIZE] &= !(1 << (index % BLOCK_SIZE));
     }
 
-    fn read(&self, index: usize) -> bool {
+    const fn read(&self, index: usize) -> bool {
         self.content[index / BLOCK_SIZE] & 1 << (index % BLOCK_SIZE) != 0
     }
 
@@ -301,6 +308,15 @@ where
     fn disjoint(&self, rhs: &Self) -> bool {
         iter::zip(&self.content, &rhs.content).all(|(&x, &y)| x & y == 0)
     }
+}
+
+fn iter_ones<I>(iterator: I) -> impl Iterator<Item = usize>
+where
+    I: Iterator<Item = usize>,
+{
+    iterator
+        .enumerate()
+        .flat_map(|(i, x)| IterOne::new(x).map(move |y| i * BLOCK_SIZE + y))
 }
 
 #[derive(Clone)]
