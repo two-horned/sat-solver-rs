@@ -25,6 +25,14 @@ where
         Self(BitVec::new(blocks * 2, a))
     }
 
+    pub(crate) fn allocator(&self) -> A {
+        Box::allocator(&self.0.content)
+    }
+
+    pub(crate) fn create_sibling(&self) -> Self {
+        Self(BitVec::create_sibling(&self.0.content))
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.0.ones()
     }
@@ -228,6 +236,16 @@ where
         Self {
             ones: OnceCell::new(),
             content: unsafe { Box::new_zeroed_slice_in(len, a).assume_init() },
+        }
+    }
+
+    fn create_sibling(&self) {
+        Self {
+            ones: OnceCell::new(),
+            content: unsafe {
+                Box::new_zeroed_slice_in(self.content.len(), Box::allocator(&self.content))
+                    .assume_init()
+            },
         }
     }
 
