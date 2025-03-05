@@ -11,7 +11,7 @@ pub(crate) const fn bytes_needed(vrs: usize) -> usize {
 }
 
 pub(crate) const fn blocks_needed(vrs: usize) -> usize {
-    vrs / BLOCK_SIZE + if vrs % BLOCK_SIZE == 0 { 0 } else { 1 }
+    vrs / BLOCK_SIZE + (vrs % BLOCK_SIZE > 0) as usize
 }
 
 impl<A> Clause<A>
@@ -25,12 +25,8 @@ where
         Self(BitVec::new(blocks * 2, a))
     }
 
-    pub(crate) fn allocator(&self) -> A {
-        Box::allocator(&self.0.content)
-    }
-
     pub(crate) fn create_sibling(&self) -> Self {
-        Self(BitVec::create_sibling(&self.0.content))
+        Self(BitVec::create_sibling(&self.0))
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -136,18 +132,6 @@ where
         (0..self.half_cap()).all(|i| self.0.content[i] & self.0.content[self.half_idx(i)] == 0)
     }
 
-    //  pub(crate) fn capacity(&self) -> usize {
-    //      BLOCK_SIZE * self.half_len()
-    //  }
-
-    //  pub(crate) fn content_length(&self) -> usize {
-    //      self.pos.content.len()
-    //  }
-
-    //  pub(crate) fn is_null(&self) -> bool {
-    //      self.pos.is_null() && self.neg.is_null()
-    //  }
-
     pub(crate) fn iter_literals(&self) -> impl Iterator<Item = isize> + use<'_, A> {
         iter::chain(
             iter_ones(self.0.content[..self.half_cap()].iter().copied()).map(|x| x as isize + 1),
@@ -239,11 +223,11 @@ where
         }
     }
 
-    fn create_sibling(&self) {
+    fn create_sibling(&self) -> Self {
         Self {
             ones: OnceCell::new(),
             content: unsafe {
-                Box::new_zeroed_slice_in(self.content.len(), Box::allocator(&self.content))
+                Box::new_zeroed_slice_in(self.content.len(), *Box::allocator(&self.content))
                     .assume_init()
             },
         }
@@ -271,10 +255,6 @@ where
             .enumerate()
             .flat_map(move |(i, (&x, &y))| IterOne::new(f(x, y)).map(move |z| i * BLOCK_SIZE + z))
     }
-
-    //  fn iter_ones(&self) -> impl Iterator<Item = usize> + use<'_, A> {
-    //      self.content.iter_ones()
-    //  }
 
     fn zip_bits<F>(&self, rhs: &Self, f: F) -> Self
     where
