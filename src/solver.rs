@@ -2,7 +2,7 @@ use core::alloc::{Allocator, Layout};
 use std::iter::FusedIterator;
 
 use crate::alloc::PoolAlloc;
-use crate::data::{blocks_needed, bytes_needed, Clause};
+use crate::data::{Clause, blocks_needed, bytes_needed};
 use crate::utils::*;
 use core::iter::Iterator;
 use rand::seq::IndexedRandom;
@@ -19,9 +19,9 @@ impl Solver {
         };
 
         let vec_alloc = {
-            let bytes = size_of::<Clause<&PoolAlloc>>() * cls_numbr;
+            let bytes = size_of::<Clause<&PoolAlloc>>() * cls_numbr * var_numbr;
             let layout = Layout::from_size_align(bytes, 32).unwrap();
-            Box::into_raw(Box::new(PoolAlloc::new(layout, 100 + var_numbr)))
+            Box::into_raw(Box::new(PoolAlloc::new(layout, 3)))
         };
 
         let work_onto = Task::Todo(Problem::new(
@@ -78,9 +78,32 @@ impl Solver {
                     Err(SolverError::TooFewClauses)
                 } else {
                     x.prepare();
-                    let res = x.solve();
-                    self.work_onto = Task::Done(res.clone());
-                    Ok(res)
+                    let mut guesses = 0;
+                    loop {
+                        guesses += 1;
+                        let mut copy = x.clone();
+                        if copy.guess() {
+                            let solution = {
+                                let mut tmp: Vec<_> = copy.guessed.iter_literals().collect();
+                                tmp.sort_by_key(|x| x.abs());
+                                Some(tmp)
+                            };
+                            self.work_onto = Task::Done(solution.clone());
+                            return Ok(solution);
+                        }
+
+                        if copy.guessed.is_null() {
+                            self.work_onto = Task::Done(None);
+                            println!("Guesses needed {}", guesses);
+                            return Ok(None);
+                        }
+
+                        x.clauses.push(copy.guessed.evil_twin());
+                        let k = x.combine_from(x.clauses.len() - 1);
+                        x.subsumption_from(k);
+                        x.recents.push(k);
+                        x.consume_recents();
+                    }
                 }
             }
         }
@@ -127,9 +150,33 @@ where
         self.ascend_by_key(k, Clause::len)
     }
 
+    fn remove_tautologies(&mut self) {
+        self.clauses.retain(Clause::disjoint_switched_self)
+    }
+
     fn subsumption_from(&mut self, k: usize) {
         let c = self.clauses[k].clone();
         self.clauses.retain_from(|x| !c.subset_of(x), k + 1)
+    }
+
+    fn remove_pure_literals(&mut self) {
+        let mut acc = self.deduced.create_sibling();
+        self.clauses.iter().for_each(|x| acc.unsafe_union_in(x));
+
+        acc.difference_switched_self();
+        if !acc.is_null() {
+            self.clauses.retain(|x| acc.disjoint(x));
+            self.deduced.unsafe_union_in(&acc);
+        }
+    }
+
+    fn remove_long_clauses(&mut self) {
+        while let Some(x) = self.clauses.last() {
+            if x.len() < self.clauses.len() {
+                return;
+            }
+            self.clauses.pop();
+        }
     }
 
     fn count_supersets_of_till(&self, of: usize, till: usize) -> usize {
@@ -146,46 +193,22 @@ where
             .count()
     }
 
-    fn remove_tautologies(&mut self) {
-        self.clauses.retain(Clause::disjoint_switched_self)
-    }
-
-    fn remove_pure_literals(&mut self) {
+    fn find_badness(&self, k: usize) -> Option<isize> {
+        let x = &self.clauses[k];
         self.clauses
             .iter()
-            .for_each(|x| self.deduced.unsafe_union_in(x));
-        self.deduced = self.deduced.difference_switched_self();
-        self.clauses.retain(|x| self.deduced.disjoint(x));
-    }
-
-    fn remove_long_clauses(&mut self) {
-        while let Some(x) = self.clauses.last() {
-            if x.len() < self.clauses.len() {
-                return;
-            }
-            self.clauses.pop();
-        }
+            .take(k)
+            .find_map(|y| y.unsafe_symmetry_in(x))
     }
 
     fn combine_from(&mut self, mut k: usize) -> usize {
         loop {
             k = self.descend(k);
-            let x = &self.clauses[k];
-            match self
-                .clauses
-                .iter()
-                .take(k)
-                .find_map(|y| y.unsafe_symmetry_in(x))
-            {
+            match self.find_badness(k) {
                 Some(badness) => self.clauses[k].unset(badness),
                 _ => return k,
             }
         }
-    }
-
-    fn choice(&self) -> Option<isize> {
-        let literals: Vec<isize> = self.clauses[0].iter_literals().collect();
-        literals.choose(&mut rand::rng()).copied()
     }
 
     fn consume_recents(&mut self) {
@@ -201,30 +224,36 @@ where
         }
     }
 
+    fn update_recents(&mut self, cause: usize) {
+        if let Some(mut i) = self.recents.iter().position(|&x| x >= cause) {
+            self.recents
+                .retain_from(|&x| !self.clauses[cause].subset_of(&self.clauses[x]), i);
+
+            let (mut a, mut r) = (0, cause + 1);
+
+            while i < self.recents.len() {
+                a += self.count_supersets_of_from_till(cause, r, self.recents[i]);
+                r = self.recents[i];
+                self.recents[i] -= a;
+                i += 1;
+            }
+        }
+    }
+
     fn delete_literal(&mut self, at: usize, literal: isize) -> usize {
         self.clauses[at].unset(literal);
         let k = self.combine_from(at);
-        self.recents
-            .retain(|&x| x > k && !self.clauses[k].subset_of(&self.clauses[x]));
         let res = self.count_supersets_of_till(k, at);
-
-        {
-            let mut res = 0;
-            let mut r = k + 1;
-            for i in 0..self.recents.len() {
-                if self.recents[i] <= k + 1 {
-                    continue;
-                }
-                res += self.count_supersets_of_from_till(k, r, self.recents[i]);
-                self.recents[i] -= res;
-                r = self.recents[i];
-            }
-        }
-
+        self.update_recents(k);
         self.subsumption_from(k);
         self.recents.push(k);
         self.recents.descend(self.recents.len() - 1);
         res
+    }
+
+    fn choice(&self) -> Option<isize> {
+        let literals: Vec<isize> = self.clauses[0].iter_literals().collect();
+        literals.choose(&mut rand::rng()).copied()
     }
 
     fn resolve(&mut self, literal: isize) {
@@ -249,15 +278,10 @@ where
             self.subsumption_from(i);
             i += 1;
         }
+
         i = 0;
         while i < self.clauses.len() {
-            let x = &self.clauses[i];
-            match self
-                .clauses
-                .iter()
-                .take(i)
-                .find_map(|y| y.unsafe_symmetry_in(x))
-            {
+            match self.find_badness(i) {
                 Some(badness) => i -= self.delete_literal(i, badness),
                 _ => (),
             }
@@ -277,45 +301,17 @@ where
         }
     }
 
-    fn solve(&mut self) -> Option<Vec<isize>> {
-        self.kernelize();
-        if self.clauses.len() == 0 {
-            let mut solution: Vec<_> = self.guessed.iter_literals().collect();
-            solution.sort_by_key(|x| x.abs());
-            return Some(solution);
-        }
-        if self.clauses.len() == 1 {
-            return None;
-        }
-
-        let comps = {
-            let mut tmp: Vec<_> = ComponentsIter::new(self).collect();
-            tmp.sort_by_key(|x| x.clauses.len());
-            tmp
-        };
-
-        for mut comp in comps {
-            let c = comp.choice()?;
-            let mut copy = comp.clone();
-            comp.resolve(c);
-            if comp.solve().is_some() {
-                self.guessed.unsafe_union_in(&comp.guessed);
-                self.deduced.unsafe_union_in(&comp.deduced);
-                continue;
+    fn guess(&mut self) -> bool {
+        loop {
+            self.kernelize();
+            if self.clauses.is_empty() {
+                return true;
             }
-
-            copy.resolve(-c);
-            if copy.solve().is_some() {
-                self.guessed.unsafe_union_in(&copy.guessed);
-                self.deduced.unsafe_union_in(&copy.deduced);
-                continue;
+            match self.choice() {
+                Some(c) => self.resolve(c),
+                _ => return false,
             }
-            return None;
         }
-
-        let mut solution: Vec<_> = self.guessed.iter_literals().collect();
-        solution.sort_by_key(|x| x.abs());
-        Some(solution)
     }
 }
 
