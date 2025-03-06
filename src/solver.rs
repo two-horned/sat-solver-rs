@@ -161,22 +161,21 @@ where
 
     fn remove_pure_literals(&mut self) {
         let mut acc = self.deduced.create_sibling();
-        self.clauses.iter().for_each(|x| acc.unsafe_union_in(x));
+        self.clauses.iter().for_each(|x| acc.union_in(x));
 
         acc.difference_switched_self();
         if !acc.is_null() {
             self.clauses.retain(|x| acc.disjoint(x));
-            self.deduced.unsafe_union_in(&acc);
+            self.deduced.union_in(&acc);
         }
     }
 
     fn remove_long_clauses(&mut self) {
-        while let Some(x) = self.clauses.last() {
-            if x.len() < self.clauses.len() {
-                return;
-            }
-            self.clauses.pop();
+        let mut i = self.clauses.len();
+        while i > 1 && self.clauses[i - 1].len() >= self.clauses.len() {
+            i -= 1;
         }
+        self.clauses.drain(i..);
     }
 
     fn count_supersets_of_till(&self, of: usize, till: usize) -> usize {
@@ -195,10 +194,7 @@ where
 
     fn find_badness(&self, k: usize) -> Option<isize> {
         let x = &self.clauses[k];
-        self.clauses
-            .iter()
-            .take(k)
-            .find_map(|y| y.unsafe_symmetry_in(x))
+        self.clauses.iter().take(k).find_map(|y| y.symmetry_in(x))
     }
 
     fn combine_from(&mut self, mut k: usize) -> usize {
@@ -216,7 +212,7 @@ where
             let c = self.clauses[k].clone();
             let mut i = k;
             while i < self.clauses.len() {
-                if let Some(badness) = c.unsafe_symmetry_in(&self.clauses[i]) {
+                if let Some(badness) = c.symmetry_in(&self.clauses[i]) {
                     i -= self.delete_literal(i, badness);
                 }
                 i += 1;
@@ -313,6 +309,34 @@ where
             }
         }
     }
+
+    fn remove_single_occurance(&mut self, literal: isize) {
+        let k = self.clauses.iter().position(|x| x.read(literal)).unwrap();
+
+        self.recents.extend(
+            self.clauses
+                .iter()
+                .enumerate()
+                .filter_map(|(i, x)| if x.read(-literal) { Some(i) } else { None }),
+        );
+    }
+
+    fn remove_two_two_occurance(&mut self, literal: usize) {}
+
+    fn remove_rarest_literal(&mut self) {
+        let mut once = self.guessed.create_sibling();
+        let mut twice = self.guessed.create_sibling();
+        let mut thrice = self.guessed.create_sibling();
+
+        once.difference_in(&twice);
+        twice.difference_in(&thrice);
+
+        for now in self.clauses.iter() {
+            once.union_in(now);
+            twice.union_with_joined_in(now, &once);
+            thrice.union_with_joined_in(&once, &twice);
+        }
+    }
 }
 
 impl<A, B> Descent for Problem<A, B>
@@ -403,9 +427,7 @@ where
                 break;
             }
             e.iter().for_each(|x| x.unsafe_enrich_variables(&mut r));
-            while let Some(x) = e.pop() {
-                v.push(x);
-            }
+            v.extend(e.drain(..));
         }
 
         v.sort_by_key(Clause::len);

@@ -55,25 +55,33 @@ where
         res
     }
 
-    pub(crate) fn zip_clause<F>(&self, rhs: &Self, f: F) -> Self
+    fn zip_clause<F>(&self, rhs: &Self, f: F) -> Self
     where
         F: Fn(usize, usize) -> usize,
     {
         Self(BitVec::zip_bits(&self.0, &rhs.0, f))
     }
 
-    pub(crate) fn unsafe_zip_clause_in<F>(&mut self, rhs: &Self, f: F)
+    fn unsafe_zip_clause_in<F>(&mut self, rhs: &Self, f: F)
     where
         F: Fn(&mut usize, usize) -> (),
     {
         BitVec::unsafe_zip_bits_in(&mut self.0, &rhs.0, f);
     }
 
-    pub(crate) fn unsafe_union_in(&mut self, rhs: &Self) {
+    pub(crate) fn union_in(&mut self, rhs: &Self) {
         self.unsafe_zip_clause_in(rhs, |x, y| *x |= y);
     }
 
-    pub(crate) fn unsafe_zip3_clause_in<F>(&mut self, rhs: &Self, rsh: &Self, f: F)
+    pub(crate) fn difference_in(&mut self, rhs: &Self) {
+        self.unsafe_zip_clause_in(rhs, |x, y| *x &= !y);
+    }
+
+    pub(crate) fn union_with_joined_in(&mut self, rhs: &Self, rsh: &Self) {
+        self.unsafe_zip3_clause_in(rhs, rsh, |x, y, z| *x |= y & z);
+    }
+
+    fn unsafe_zip3_clause_in<F>(&mut self, rhs: &Self, rsh: &Self, f: F)
     where
         F: Fn(&mut usize, usize, usize) -> (),
     {
@@ -174,7 +182,7 @@ where
         )
     }
 
-    pub(crate) fn unsafe_symmetry_in(&self, rhs: &Self) -> Option<isize> {
+    pub(crate) fn symmetry_in(&self, rhs: &Self) -> Option<isize> {
         let mut difference = self.unsafe_iter_differences(&rhs);
 
         if let Some(x) = difference.next() {
@@ -252,19 +260,6 @@ where
 
     fn is_null(&self) -> bool {
         self.content.iter().all(|&x| x == 0)
-    }
-
-    fn unsafe_iter_bin_op<'b, F>(
-        &self,
-        rhs: &'b Self,
-        f: F,
-    ) -> impl Iterator<Item = usize> + use<'_, 'b, A, F>
-    where
-        F: Fn(usize, usize) -> usize,
-    {
-        iter::zip(&self.content, &rhs.content)
-            .enumerate()
-            .flat_map(move |(i, (&x, &y))| IterOne::new(f(x, y)).map(move |z| i * BLOCK_SIZE + z))
     }
 
     fn zip_bits<F>(&self, rhs: &Self, f: F) -> Self
