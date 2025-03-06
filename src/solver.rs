@@ -89,6 +89,7 @@ impl Solver {
                                 Some(tmp)
                             };
                             self.work_onto = Task::Done(solution.clone());
+                            println!("Guesses needed {}", guesses);
                             return Ok(solution);
                         }
 
@@ -221,17 +222,16 @@ where
     }
 
     fn update_recents(&mut self, cause: usize) {
-        if let Some(mut i) = self.recents.iter().position(|&x| x >= cause) {
+        if let Some(i) = self.recents.iter().position(|&x| x >= cause) {
             self.recents
                 .retain_from(|&x| !self.clauses[cause].subset_of(&self.clauses[x]), i);
 
             let (mut a, mut r) = (0, cause + 1);
 
-            while i < self.recents.len() {
-                a += self.count_supersets_of_from_till(cause, r, self.recents[i]);
-                r = self.recents[i];
-                self.recents[i] -= a;
-                i += 1;
+            for j in i..self.recents.len() {
+                a += self.count_supersets_of_from_till(cause, r, self.recents[j]);
+                r = self.recents[j];
+                self.recents[j] -= a;
             }
         }
     }
@@ -265,17 +265,16 @@ where
         self.consume_recents();
     }
 
-    fn prepare(&mut self) {
-        self.remove_tautologies();
-        self.sort();
-
+    fn subsumption_ellimination(&mut self) {
         let mut i = 0;
         while i < self.clauses.len() {
             self.subsumption_from(i);
             i += 1;
         }
+    }
 
-        i = 0;
+    fn break_enabled_symmetry(&mut self) {
+        let mut i = 0;
         while i < self.clauses.len() {
             match self.find_badness(i) {
                 Some(badness) => i -= self.delete_literal(i, badness),
@@ -283,6 +282,13 @@ where
             }
             i += 1;
         }
+    }
+
+    fn prepare(&mut self) {
+        self.remove_tautologies();
+        self.sort();
+        self.subsumption_ellimination();
+        self.break_enabled_symmetry();
         self.consume_recents();
     }
 
