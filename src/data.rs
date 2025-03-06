@@ -26,11 +26,15 @@ where
     }
 
     pub(crate) fn create_sibling(&self) -> Self {
-        Self(BitVec::create_sibling(&self.0))
+        Self(self.0.create_sibling())
     }
 
     pub(crate) fn len(&self) -> usize {
         self.0.ones()
+    }
+
+    pub(crate) fn is_null(&self) -> bool {
+        self.0.is_null()
     }
 
     const fn half_cap(&self) -> usize {
@@ -39,6 +43,16 @@ where
 
     const fn half_idx(&self, i: usize) -> usize {
         self.half_cap() + i
+    }
+
+    pub(crate) fn evil_twin(&self) -> Self {
+        let mut res = self.create_sibling();
+        (0..self.half_cap()).for_each(|i| {
+            let j = self.half_idx(i);
+            res.0.content[i] = self.0.content[j];
+            res.0.content[j] = self.0.content[i];
+        });
+        res
     }
 
     pub(crate) fn zip_clause<F>(&self, rhs: &Self, f: F) -> Self
@@ -70,16 +84,13 @@ where
         BitVec::subset_of(&self.0, &rhs.0)
     }
 
-    pub(crate) fn difference_switched_self(&self) -> Self {
-        let mut res = Self(BitVec::new(
-            self.0.content.len(),
-            *Box::allocator(&self.0.content),
-        ));
+    pub(crate) fn difference_switched_self(&mut self) {
         (0..self.half_cap()).for_each(|i| {
-            res.0.content[i] = self.0.content[i] & !self.0.content[self.half_idx(i)];
-            res.0.content[self.half_idx(i)] = self.0.content[self.half_idx(i)] & !self.0.content[i];
+            let j = self.half_idx(i);
+            let (a, b) = (self.0.content[i], self.0.content[j]);
+            self.0.content[i] = a & !b;
+            self.0.content[j] = b & !a;
         });
-        res
     }
 
     const fn true_idx(&self, index: isize) -> usize {
@@ -164,12 +175,13 @@ where
     }
 
     pub(crate) fn unsafe_symmetry_in(&self, rhs: &Self) -> Option<isize> {
-        let (badness, control) = {
-            let mut difference = self.unsafe_iter_differences(&rhs);
-            (difference.next(), difference.next())
-        };
-        if control.is_none() {
-            return badness.map(|x| if rhs.read(-x) { Some(-x) } else { None })?;
+        let mut difference = self.unsafe_iter_differences(&rhs);
+
+        if let Some(x) = difference.next() {
+            let badness = -x;
+            if rhs.read(badness) && difference.next().is_none() {
+                return Some(badness);
+            }
         }
         None
     }
@@ -200,11 +212,10 @@ impl Iterator for IterOne {
     fn next(&mut self) -> Option<Self::Item> {
         if self.num == 0 {
             return None;
-        } else {
-            let tmp = self.num.trailing_zeros() as usize;
-            self.num &= self.num - 1;
-            Some(tmp)
         }
+        let tmp = self.num.trailing_zeros() as usize;
+        self.num &= self.num - 1;
+        Some(tmp)
     }
 }
 
