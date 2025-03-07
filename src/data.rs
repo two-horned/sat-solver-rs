@@ -18,10 +18,7 @@ impl<A> Clause<A>
 where
     A: Allocator + Copy,
 {
-    pub(crate) fn new(blocks: usize, a: A) -> Self
-    where
-        A: Allocator,
-    {
+    pub(crate) fn new(blocks: usize, a: A) -> Self {
         Self(BitVec::new(blocks * 2, a))
     }
 
@@ -122,24 +119,16 @@ where
         self.0.unset(self.true_idx(index));
     }
 
-    pub(crate) fn flip(&mut self, index: isize) {
-        self.0.unset(index);
-        self.0.set(-index);
-    }
-
-    pub(crate) fn variables(&self) -> BitVec<A>
-    where
-        A: Allocator,
-    {
+    pub(crate) fn variables(&self) -> BitVec<A> {
         let mut res = BitVec::new(self.half_cap(), self.allocator());
         (0..self.half_cap())
             .for_each(|i| res.content[i] = self.0.content[i] | self.0.content[self.half_idx(i)]);
         res
     }
 
-    pub(crate) fn enrich_variables(&self, vrs: &mut BitVec<A>)
+    pub(crate) fn enrich_variables<B>(&self, vrs: &mut BitVec<B>)
     where
-        A: Allocator,
+        B: Allocator + Copy,
     {
         (0..vrs.content.len())
             .for_each(|i| vrs.content[i] |= self.0.content[i] | self.0.content[self.half_idx(i)]);
