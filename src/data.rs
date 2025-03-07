@@ -34,8 +34,8 @@ where
         self.0.allocator()
     }
 
-    pub(crate) fn clear(&mut self) {
-        self.0.clear();
+    pub(crate) fn _clear(&mut self) {
+        self.0._clear();
     }
 
     pub(crate) fn is_null(&self) -> bool {
@@ -50,7 +50,7 @@ where
         self.half_cap() + i
     }
 
-    pub(crate) fn evil_twin(&self) -> Self {
+    pub(crate) fn _evil_twin(&self) -> Self {
         let mut res = self.create_sibling();
         (0..self.half_cap()).for_each(|i| {
             let j = self.half_idx(i);
@@ -244,7 +244,7 @@ where
             .get_or_init(|| self.content.iter().map(|x| x.count_ones()).sum::<u32>() as usize)
     }
 
-    fn clear(&mut self) {
+    fn _clear(&mut self) {
         self.ones.take();
         self.content.iter_mut().for_each(|x| *x = 0);
     }

@@ -3,23 +3,27 @@ use crate::data::{Clause, blocks_needed, bytes_needed};
 use crate::utils::*;
 use core::alloc::{Allocator, Layout};
 use core::iter::{FusedIterator, Iterator};
+use core::mem;
+use core::ops::Neg;
 use rand::seq::IndexedRandom;
 
 impl Solver {
     pub fn new(var_numbr: usize, cls_numbr: usize) -> Self {
+        let max_steps = usize::min(var_numbr, cls_numbr / 3 + 3);
+
         let cls_alloc = {
             let bytes = bytes_needed(var_numbr);
             let layout = Layout::from_size_align(bytes, 32).unwrap();
             Box::into_raw(Box::new(PoolAlloc::new(
                 layout,
-                100 + var_numbr * cls_numbr,
+                100 + max_steps * cls_numbr,
             )))
         };
 
         let vec_alloc = {
-            let bytes = size_of::<Clause<&PoolAlloc>>() * cls_numbr * var_numbr;
+            let bytes = size_of::<Clause<&PoolAlloc>>() * cls_numbr * 2;
             let layout = Layout::from_size_align(bytes, 32).unwrap();
-            Box::into_raw(Box::new(PoolAlloc::new(layout, 3)))
+            Box::into_raw(Box::new(PoolAlloc::new(layout, 100 + max_steps)))
         };
 
         let work_onto = Task::Todo(Problem::new(
@@ -61,53 +65,42 @@ impl Solver {
                     }
                     new_clause.set(i);
                 }
-                x.clauses.push(new_clause);
+                x.clauses
+                    .push_within_capacity(new_clause)
+                    .unwrap_or_else(|_| panic!("Not enough capacity"));
                 Ok(())
             }
             _ => Err(SolverError::TooManyClauses),
         }
     }
 
-    pub fn solve(&mut self) -> Result<Option<Vec<isize>>, SolverError> {
+    pub fn solve(&mut self) -> Result<Solution, SolverError> {
         match &mut self.work_onto {
             Task::Done(x) => Ok(x.clone()),
             Task::Todo(x) => {
                 if x.clauses.len() < self.cls_numbr {
-                    Err(SolverError::TooFewClauses)
-                } else {
-                    x.prepare();
-                    let mut copy = x.clone();
-                    let mut guesses = 0;
-                    loop {
-                        guesses += 1;
-                        if copy.guess() {
-                            let solution = {
-                                let mut tmp: Vec<_> = copy.guessed.iter_literals().collect();
-                                tmp.sort_by_key(|x| x.abs());
-                                Some(tmp)
-                            };
-                            self.work_onto = Task::Done(solution.clone());
-                            println!("Guesses needed {}", guesses);
-                            return Ok(solution);
-                        }
-
-                        if copy.guessed.is_null() {
-                            self.work_onto = Task::Done(None);
-                            println!("Guesses needed {}", guesses);
-                            return Ok(None);
-                        }
-
-                        x.clauses.push(copy.guessed.evil_twin());
-                        let k = x.combine_from(x.clauses.len() - 1);
-                        x.subsumption_from(k);
-                        x.recents.push(k);
-                        x.consume_recents();
-                        copy.restart_from(x);
-                    }
+                    return Err(SolverError::TooFewClauses);
                 }
+                x.prepare();
+                let solution = if x.solve() {
+                    let mut tmp: Vec<_> = x.guessed.iter_literals().collect();
+                    tmp.sort_by_key(|x| x.abs());
+                    Solution::Satisfiable(tmp)
+                } else {
+                    Solution::Unsatisfiable
+                };
+
+                self.work_onto = Task::Done(solution.clone());
+                return Ok(solution);
             }
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub enum Solution {
+    Satisfiable(Vec<isize>),
+    Unsatisfiable,
 }
 
 pub struct Solver {
@@ -115,7 +108,7 @@ pub struct Solver {
     cls_numbr: usize,
     cls_alloc: *mut PoolAlloc,
     vec_alloc: *mut PoolAlloc,
-    work_onto: Task<Problem<&'static PoolAlloc, &'static PoolAlloc>, Option<Vec<isize>>>,
+    work_onto: Task<Problem<&'static PoolAlloc, &'static PoolAlloc>, Solution>,
 }
 
 enum Task<A, B> {
@@ -130,7 +123,7 @@ where
 {
     fn new(vrs: usize, cls: usize, a: A, b: B) -> Self {
         let blocks = blocks_needed(vrs);
-        Problem {
+        Self {
             guessed: Clause::new(blocks, a),
             deduced: Clause::new(blocks, a),
             clauses: Vec::with_capacity_in(cls, b),
@@ -138,12 +131,13 @@ where
         }
     }
 
-    fn restart_from(&mut self, other: &Self) {
-        self.guessed.clear();
-        self.deduced.clear();
-        self.recents.clear();
-        self.clauses.clear();
-        self.clauses.extend_from_slice(&other.clauses);
+    fn new_for_clauses(guessed: Clause<A>, deduced: Clause<A>, clauses: Vec<Clause<A>, B>) -> Self {
+        Self {
+            guessed,
+            deduced,
+            clauses,
+            recents: Vec::new(),
+        }
     }
 
     fn sort(&mut self) {
@@ -256,7 +250,7 @@ where
 
     fn choice(&self) -> Option<isize> {
         let literals: Vec<isize> = self.clauses[0].iter_literals().collect();
-        literals.choose(&mut rand::rng()).copied()
+        literals.choose(&mut rand::rng()).copied().map(Neg::neg)
     }
 
     fn resolve(&mut self, literal: isize) {
@@ -319,17 +313,39 @@ where
         }
     }
 
-    fn guess(&mut self) -> bool {
-        loop {
-            self.kernelize();
-            if self.clauses.is_empty() {
-                return true;
-            }
-            match self.choice() {
-                Some(c) => self.resolve(c),
-                _ => return false,
-            }
+    fn solve(&mut self) -> bool {
+        self.kernelize();
+        if self.clauses.len() == 0 {
+            return true;
         }
+        if self.clauses.len() == 1 {
+            return false;
+        }
+
+        let comps = {
+            let mut tmp = Vec::new_in(*Vec::allocator(&self.clauses));
+            mem::swap(&mut tmp, &mut self.clauses);
+            Components::new(self.guessed.clone(), self.deduced.clone(), tmp)
+        };
+
+        for mut comp in comps {
+            let copy = comp.clone();
+            comp.resolve(comp.choice().unwrap());
+            if comp.solve() {
+                self.guessed.union_in(&comp.guessed);
+                self.deduced.union_in(&comp.deduced);
+                continue;
+            }
+            comp = copy;
+            comp.resolve(comp.choice().unwrap());
+            if comp.solve() {
+                self.guessed.union_in(&comp.guessed);
+                self.deduced.union_in(&comp.deduced);
+                continue;
+            }
+            return false;
+        }
+        true
     }
 
     fn remove_single_occurance(&mut self, literal: isize) {
@@ -349,7 +365,9 @@ where
         buf.retain(|x| self.clauses.iter().find(|y| y.subset_of(&x)).is_none());
 
         buf.drain(..).for_each(|x| {
-            self.clauses.push(x);
+            self.clauses
+                .push_within_capacity(x)
+                .unwrap_or_else(|_| panic!("Not enough capacity"));
             let k = self.combine_from(self.clauses.len() - 1);
             self.subsumption_from(k);
             self.recents.push(k);
@@ -426,7 +444,6 @@ pub enum SolverError {
 
 impl Drop for Solver {
     fn drop(&mut self) {
-        self.work_onto = Task::Done(None);
         unsafe {
             let _ = Box::from_raw(self.cls_alloc);
             let _ = Box::from_raw(self.vec_alloc);
@@ -434,30 +451,33 @@ impl Drop for Solver {
     }
 }
 
-impl<'a, A, B> FusedIterator for ComponentsIter<'a, A, B>
+impl<A, B> FusedIterator for Components<A, B>
 where
     A: Allocator + Copy,
     B: Allocator + Copy,
 {
 }
 
-impl<'a, A, B> Iterator for ComponentsIter<'a, A, B>
+impl<A, B> Iterator for Components<A, B>
 where
     A: Allocator + Copy,
     B: Allocator + Copy,
 {
     type Item = Problem<A, B>;
     fn next(&mut self) -> Option<Self::Item> {
-        let x = self.problem.clauses.pop()?;
-        let b = *Vec::allocator(&self.problem.clauses);
-        let mut v = Vec::with_capacity_in(self.problem.clauses.capacity(), b);
-        let mut e = Vec::with_capacity_in(self.problem.clauses.capacity(), b);
+        let x = self.clauses.pop()?;
+        let (mut v, mut e) = {
+            let b = *Vec::allocator(&self.clauses);
+            (
+                Vec::with_capacity_in(self.clauses.len(), b),
+                Vec::with_capacity_in(self.clauses.len(), b),
+            )
+        };
         let mut r = x.variables();
-        v.push(x);
+        v.push_within_capacity(x)
+            .unwrap_or_else(|_| panic!("Not enough capacity"));
         loop {
-            self.problem
-                .clauses
-                .extract_in(&mut e, |x| x.has_variables(&r));
+            self.clauses.extract_in(&mut e, |x| x.has_variables(&r));
             if e.is_empty() {
                 break;
             }
@@ -466,29 +486,38 @@ where
         }
 
         v.sort_by_key(Clause::len);
-        return Some(Problem {
-            guessed: self.problem.guessed.clone(),
-            deduced: self.problem.deduced.clone(),
-            clauses: v,
-            recents: self.problem.recents.clone(),
-        });
+        return Some(Problem::new_for_clauses(
+            self.guessed.clone(),
+            self.deduced.clone(),
+            v,
+        ));
     }
 }
 
-impl<A, B> ComponentsIter<'_, A, B>
+impl<A, B> Components<A, B>
 where
     A: Allocator + Copy,
     B: Allocator + Copy,
 {
-    fn new<'a>(problem: &'a mut Problem<A, B>) -> ComponentsIter<'a, A, B> {
-        ComponentsIter { problem }
+    fn new<'a>(
+        guessed: Clause<A>,
+        deduced: Clause<A>,
+        clauses: Vec<Clause<A>, B>,
+    ) -> Components<A, B> {
+        Components {
+            guessed,
+            deduced,
+            clauses,
+        }
     }
 }
 
-struct ComponentsIter<'a, A, B>
+struct Components<A, B>
 where
     A: Allocator + Copy,
     B: Allocator + Copy,
 {
-    problem: &'a mut Problem<A, B>,
+    guessed: Clause<A>,
+    deduced: Clause<A>,
+    clauses: Vec<Clause<A>, B>,
 }
