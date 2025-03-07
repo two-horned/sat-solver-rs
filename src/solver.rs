@@ -78,10 +78,10 @@ impl Solver {
                     Err(SolverError::TooFewClauses)
                 } else {
                     x.prepare();
+                    let mut copy = x.clone();
                     let mut guesses = 0;
                     loop {
                         guesses += 1;
-                        let mut copy = x.clone();
                         if copy.guess() {
                             let solution = {
                                 let mut tmp: Vec<_> = copy.guessed.iter_literals().collect();
@@ -104,6 +104,7 @@ impl Solver {
                         x.subsumption_from(k);
                         x.recents.push(k);
                         x.consume_recents();
+                        copy.restart_from(x);
                     }
                 }
             }
@@ -139,6 +140,14 @@ where
         }
     }
 
+    fn restart_from(&mut self, other: &Self) {
+        self.guessed.clear();
+        self.deduced.clear();
+        self.recents.clear();
+        self.clauses.clear();
+        self.clauses.extend_from_slice(&other.clauses);
+    }
+
     fn sort(&mut self) {
         self.clauses.sort_by_key(Clause::len)
     }
@@ -147,9 +156,9 @@ where
         self.descend_by_key(k, Clause::len)
     }
 
-    fn ascend(&mut self, k: usize) -> usize {
-        self.ascend_by_key(k, Clause::len)
-    }
+    // fn ascend(&mut self, k: usize) -> usize {
+    //     self.ascend_by_key(k, Clause::len)
+    // }
 
     fn remove_tautologies(&mut self) {
         self.clauses.retain(Clause::disjoint_switched_self)
@@ -294,12 +303,21 @@ where
 
     fn kernelize(&mut self) {
         loop {
-            let old_length = self.clauses.len();
             self.remove_long_clauses();
+
+            let old_length = self.clauses.len();
             self.remove_pure_literals();
-            if old_length == self.clauses.len() {
-                break;
+            if old_length != self.clauses.len() {
+                continue;
             }
+
+            let old_length = self.clauses.len();
+            self.remove_rarest_literal();
+            if old_length != self.clauses.len() {
+                continue;
+            }
+
+            break;
         }
     }
 
@@ -317,30 +335,43 @@ where
     }
 
     fn remove_single_occurance(&mut self, literal: isize) {
+        let mut buf = Vec::with_capacity_in(self.clauses.len(), *Vec::allocator(&self.clauses));
+        self.clauses.extract_in(&mut buf, |x| x.read(-literal));
         let k = self.clauses.iter().position(|x| x.read(literal)).unwrap();
+        let mut x = self.clauses.remove(k);
+        x.unset(literal);
 
-        self.recents.extend(
-            self.clauses
-                .iter()
-                .enumerate()
-                .filter_map(|(i, x)| if x.read(-literal) { Some(i) } else { None }),
-        );
+        buf.iter_mut().for_each(|y| {
+            assert!(y.read(-literal));
+            y.unset(-literal);
+            y.union_in(&x)
+        });
+
+        buf.retain(Clause::disjoint_switched_self);
+        buf.retain(|x| self.clauses.iter().find(|&y| y.subset_of(&x)).is_none());
+
+        buf.drain(..).for_each(|x| {
+            self.clauses.push(x);
+            let k = self.combine_from(self.clauses.len() - 1);
+            self.subsumption_from(k);
+            self.recents.push(k);
+            self.consume_recents();
+        });
     }
-
-    fn remove_two_two_occurance(&mut self, literal: usize) {}
 
     fn remove_rarest_literal(&mut self) {
         let mut once = self.guessed.create_sibling();
         let mut twice = self.guessed.create_sibling();
-        let mut thrice = self.guessed.create_sibling();
 
-        once.difference_in(&twice);
-        twice.difference_in(&thrice);
-
-        for now in self.clauses.iter() {
+        self.clauses.iter().for_each(|now| {
             once.union_in(now);
             twice.union_with_joined_in(now, &once);
-            thrice.union_with_joined_in(&once, &twice);
+        });
+
+        once.difference_in(&twice);
+
+        if let Some(literal) = once.iter_literals().next() {
+            self.remove_single_occurance(literal);
         }
     }
 }
@@ -428,11 +459,11 @@ where
         loop {
             self.problem
                 .clauses
-                .extract_in(&mut e, |x| x.unsafe_has_variables(&r));
+                .extract_in(&mut e, |x| x.has_variables(&r));
             if e.is_empty() {
                 break;
             }
-            e.iter().for_each(|x| x.unsafe_enrich_variables(&mut r));
+            e.iter().for_each(|x| x.enrich_variables(&mut r));
             v.extend(e.drain(..));
         }
 

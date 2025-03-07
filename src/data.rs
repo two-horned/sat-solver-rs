@@ -33,6 +33,14 @@ where
         self.0.ones()
     }
 
+    fn allocator(&self) -> A {
+        self.0.allocator()
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.0.clear();
+    }
+
     pub(crate) fn is_null(&self) -> bool {
         self.0.is_null()
     }
@@ -55,37 +63,30 @@ where
         res
     }
 
-    fn zip_clause<F>(&self, rhs: &Self, f: F) -> Self
-    where
-        F: Fn(usize, usize) -> usize,
-    {
-        Self(BitVec::zip_bits(&self.0, &rhs.0, f))
-    }
-
-    fn unsafe_zip_clause_in<F>(&mut self, rhs: &Self, f: F)
+    fn zip_clause_in<F>(&mut self, rhs: &Self, f: F)
     where
         F: Fn(&mut usize, usize) -> (),
     {
-        BitVec::unsafe_zip_bits_in(&mut self.0, &rhs.0, f);
+        BitVec::zip_bits_in(&mut self.0, &rhs.0, f);
     }
 
     pub(crate) fn union_in(&mut self, rhs: &Self) {
-        self.unsafe_zip_clause_in(rhs, |x, y| *x |= y);
+        self.zip_clause_in(rhs, |x, y| *x |= y);
     }
 
     pub(crate) fn difference_in(&mut self, rhs: &Self) {
-        self.unsafe_zip_clause_in(rhs, |x, y| *x &= !y);
+        self.zip_clause_in(rhs, |x, y| *x &= !y);
     }
 
     pub(crate) fn union_with_joined_in(&mut self, rhs: &Self, rsh: &Self) {
-        self.unsafe_zip3_clause_in(rhs, rsh, |x, y, z| *x |= y & z);
+        self.zip3_clause_in(rhs, rsh, |x, y, z| *x |= y & z);
     }
 
-    fn unsafe_zip3_clause_in<F>(&mut self, rhs: &Self, rsh: &Self, f: F)
+    fn zip3_clause_in<F>(&mut self, rhs: &Self, rsh: &Self, f: F)
     where
         F: Fn(&mut usize, usize, usize) -> (),
     {
-        BitVec::unsafe_zip3_bits_in(&mut self.0, &rhs.0, &rsh.0, f);
+        BitVec::zip3_bits_in(&mut self.0, &rhs.0, &rsh.0, f);
     }
 
     pub(crate) fn subset_of(&self, rhs: &Self) -> bool {
@@ -93,6 +94,7 @@ where
     }
 
     pub(crate) fn difference_switched_self(&mut self) {
+        self.0.ones.take();
         (0..self.half_cap()).for_each(|i| {
             let j = self.half_idx(i);
             let (a, b) = (self.0.content[i], self.0.content[j]);
@@ -120,17 +122,22 @@ where
         self.0.unset(self.true_idx(index));
     }
 
+    pub(crate) fn flip(&mut self, index: isize) {
+        self.0.unset(index);
+        self.0.set(-index);
+    }
+
     pub(crate) fn variables(&self) -> BitVec<A>
     where
         A: Allocator,
     {
-        let mut res = BitVec::new(self.half_cap(), *Box::allocator(&self.0.content));
+        let mut res = BitVec::new(self.half_cap(), self.allocator());
         (0..self.half_cap())
             .for_each(|i| res.content[i] = self.0.content[i] | self.0.content[self.half_idx(i)]);
         res
     }
 
-    pub(crate) fn unsafe_enrich_variables(&self, vrs: &mut BitVec<A>)
+    pub(crate) fn enrich_variables(&self, vrs: &mut BitVec<A>)
     where
         A: Allocator,
     {
@@ -138,7 +145,7 @@ where
             .for_each(|i| vrs.content[i] |= self.0.content[i] | self.0.content[self.half_idx(i)]);
     }
 
-    pub(crate) fn unsafe_has_variables(&self, vrs: &BitVec<A>) -> bool {
+    pub(crate) fn has_variables(&self, vrs: &BitVec<A>) -> bool {
         (0..vrs.content.len())
             .any(|i| (self.0.content[i] | self.0.content[self.half_idx(i)]) & vrs.content[i] != 0)
     }
@@ -158,7 +165,7 @@ where
         )
     }
 
-    pub(crate) fn unsafe_iter_differences<'b>(
+    pub(crate) fn iter_differences<'b>(
         &self,
         rhs: &'b Self,
     ) -> impl Iterator<Item = isize> + use<'_, 'b, A> {
@@ -183,7 +190,7 @@ where
     }
 
     pub(crate) fn symmetry_in(&self, rhs: &Self) -> Option<isize> {
-        let mut difference = self.unsafe_iter_differences(&rhs);
+        let mut difference = self.iter_differences(&rhs);
 
         if let Some(x) = difference.next() {
             let badness = -x;
@@ -242,12 +249,15 @@ where
         }
     }
 
+    fn allocator(&self) -> A {
+        *Box::allocator(&self.content)
+    }
+
     fn create_sibling(&self) -> Self {
         Self {
             ones: OnceCell::new(),
             content: unsafe {
-                Box::new_zeroed_slice_in(self.content.len(), *Box::allocator(&self.content))
-                    .assume_init()
+                Box::new_zeroed_slice_in(self.content.len(), self.allocator()).assume_init()
             },
         }
     }
@@ -258,20 +268,16 @@ where
             .get_or_init(|| self.content.iter().map(|x| x.count_ones()).sum::<u32>() as usize)
     }
 
+    fn clear(&mut self) {
+        self.ones.take();
+        self.content.iter_mut().for_each(|x| *x = 0);
+    }
+
     fn is_null(&self) -> bool {
         self.content.iter().all(|&x| x == 0)
     }
 
-    fn zip_bits<F>(&self, rhs: &Self, f: F) -> Self
-    where
-        F: Fn(usize, usize) -> usize,
-    {
-        let mut res = Self::new(self.content.len(), *Box::allocator(&self.content));
-        (0..self.content.len()).for_each(|i| res.content[i] = f(self.content[i], rhs.content[i]));
-        res
-    }
-
-    fn unsafe_zip_bits_in<F>(&mut self, rhs: &Self, f: F)
+    fn zip_bits_in<F>(&mut self, rhs: &Self, f: F)
     where
         F: Fn(&mut usize, usize) -> (),
     {
@@ -281,7 +287,7 @@ where
         }
     }
 
-    fn unsafe_zip3_bits_in<F>(&mut self, rhs: &Self, rsh: &Self, f: F)
+    fn zip3_bits_in<F>(&mut self, rhs: &Self, rsh: &Self, f: F)
     where
         F: Fn(&mut usize, usize, usize) -> (),
     {
