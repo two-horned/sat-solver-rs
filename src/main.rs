@@ -27,7 +27,7 @@ fn parse_header(line: String) -> Result<Header, HeaderParseError> {
         Err(x) => return Err(HeaderParseError::NotANumber(x)),
     };
 
-    if let Some(x) = nums.iter().find(|&&x| x < 0) {
+    if let Some(&x) = nums.iter().find(|&&x| x < 0) {
         return Err(HeaderParseError::NegativeNumber(x));
     }
 
