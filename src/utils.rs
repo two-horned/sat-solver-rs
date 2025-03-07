@@ -6,9 +6,11 @@ impl<T, A: Allocator> BackDrop for Vec<T, A> {
     type Item = T;
     unsafe fn back_drop(&mut self, current: usize, consequtives: usize, deleted: usize) {
         let from = current - consequtives;
-        let src = self.as_ptr().add(from);
-        let dst = self.as_mut_ptr().add(from - deleted);
-        copy(src, dst, consequtives);
+        unsafe {
+            let src = self.as_ptr().add(from);
+            let dst = self.as_mut_ptr().add(from - deleted);
+            copy(src, dst, consequtives);
+        }
     }
 }
 
