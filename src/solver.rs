@@ -261,6 +261,10 @@ where
         literals.choose(&mut rand::rng()).copied()
     }
 
+    fn resolve_many(&mut self, literals: Vec<isize>) {
+        literals.into_iter().for_each(|i| self.resolve(i));
+    }
+
     fn resolve(&mut self, literal: isize) {
         self.guessed.set(literal);
         self.clauses.retain(|x| !x.read(literal));
@@ -348,7 +352,7 @@ where
         });
 
         buf.retain(Clause::disjoint_switched_self);
-        buf.retain(|x| self.clauses.iter().find(|&y| y.subset_of(&x)).is_none());
+        buf.retain(|x| self.clauses.iter().find(|y| y.subset_of(&x)).is_none());
 
         buf.drain(..).for_each(|x| {
             self.clauses.push(x);

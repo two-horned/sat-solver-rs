@@ -154,39 +154,26 @@ where
         )
     }
 
-    pub(crate) fn iter_differences<'b>(
-        &self,
-        rhs: &'b Self,
-    ) -> impl Iterator<Item = isize> + use<'_, 'b, A> {
-        iter::chain(
-            iter_ones(
-                iter::zip(
-                    &self.0.content[..self.half_cap()],
-                    &rhs.0.content[..self.half_cap()],
-                )
-                .map(|(&x, &y)| x & !y),
-            )
-            .map(|x| x as isize + 1),
-            iter_ones(
-                iter::zip(
-                    &self.0.content[self.half_cap()..],
-                    &rhs.0.content[self.half_cap()..],
-                )
-                .map(|(&x, &y)| x & !y),
-            )
-            .map(|x| -(x as isize + 1)),
-        )
-    }
-
     pub(crate) fn symmetry_in(&self, rhs: &Self) -> Option<isize> {
-        let mut difference = self.iter_differences(&rhs);
+        let mut differences = iter::zip(&self.0.content, &rhs.0.content)
+            .map(|(x, y)| x & !y)
+            .enumerate()
+            .filter(|(_, z)| *z != 0);
 
-        if let Some(x) = difference.next() {
-            let badness = -x;
-            if rhs.read(badness) && difference.next().is_none() {
-                return Some(badness);
+        if let Some((i, x)) = differences.next() {
+            if x & x - 1 == 0 {
+                let badness = if i < self.half_cap() {
+                    -((i * BLOCK_SIZE) as isize + 1 + x.trailing_zeros() as isize)
+                } else {
+                    ((i - self.half_cap()) * BLOCK_SIZE) as isize + 1 + x.trailing_zeros() as isize
+                };
+
+                if rhs.read(badness) && differences.next().is_none() {
+                    return Some(badness);
+                }
             }
         }
+
         None
     }
 }
@@ -301,11 +288,11 @@ where
     }
 
     fn subset_of(&self, rhs: &Self) -> bool {
-        iter::zip(&self.content, &rhs.content).all(|(&x, &y)| x & !y == 0)
+        iter::zip(&self.content, &rhs.content).all(|(x, y)| x & !y == 0)
     }
 
     fn disjoint(&self, rhs: &Self) -> bool {
-        iter::zip(&self.content, &rhs.content).all(|(&x, &y)| x & y == 0)
+        iter::zip(&self.content, &rhs.content).all(|(x, y)| x & y == 0)
     }
 }
 
