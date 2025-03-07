@@ -1,10 +1,8 @@
-use core::alloc::{Allocator, Layout};
-use std::iter::FusedIterator;
-
 use crate::alloc::PoolAlloc;
 use crate::data::{Clause, blocks_needed, bytes_needed};
 use crate::utils::*;
-use core::iter::Iterator;
+use core::alloc::{Allocator, Layout};
+use core::iter::{FusedIterator, Iterator};
 use rand::seq::IndexedRandom;
 
 impl Solver {
@@ -259,10 +257,6 @@ where
     fn choice(&self) -> Option<isize> {
         let literals: Vec<isize> = self.clauses[0].iter_literals().collect();
         literals.choose(&mut rand::rng()).copied()
-    }
-
-    fn resolve_many(&mut self, literals: Vec<isize>) {
-        literals.into_iter().for_each(|i| self.resolve(i));
     }
 
     fn resolve(&mut self, literal: isize) {
