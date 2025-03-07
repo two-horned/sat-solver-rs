@@ -1,23 +1,21 @@
-#![feature(allocator_api)]
+use sat_solver::solver::Solver;
 use std::io;
 use std::time::Instant;
 
-use sat_solver::solver::Solver;
-
-use core::str::FromStr;
-
-fn parse_numbers(line: &str) -> Result<Vec<isize>, <isize as FromStr>::Err> {
+fn parse_numbers(line: &str) -> Result<Vec<isize>, String> {
     line.trim()
         .split_whitespace()
-        .map(|x| str::parse::<isize>(x))
+        .map(|x| match str::parse::<isize>(x) {
+            Ok(x) => Ok(x),
+            _ => Err(x.to_string()),
+        })
         .collect()
 }
 
-#[derive(Debug)]
 enum HeaderParseError {
     MissingHeader,
-    NegativeNumber(String),
-    NotANumber,
+    NegativeNumber(isize),
+    NotANumber(String),
 }
 
 fn parse_header(line: String) -> Result<Header, HeaderParseError> {
@@ -26,11 +24,13 @@ fn parse_header(line: String) -> Result<Header, HeaderParseError> {
     }
     let nums = match parse_numbers(&line["p cnf".len()..]) {
         Ok(x) => x,
-        Err(_) => return Err(HeaderParseError::NotANumber),
+        Err(x) => return Err(HeaderParseError::NotANumber(x)),
     };
-    if nums.iter().any(|&x| x < 0) {
-        return Err(HeaderParseError::NegativeNumber(line));
+
+    if let Some(x) = nums.iter().find(|&&x| x < 0) {
+        return Err(HeaderParseError::NegativeNumber(x));
     }
+
     Ok(Header {
         vrs: nums[0] as usize,
         cls: nums[1] as usize,
@@ -51,7 +51,17 @@ fn main() -> io::Result<()> {
                 h = Some(x);
                 break;
             }
-            Err(x) => return Ok(println!("{:?}", x)),
+            Err(HeaderParseError::MissingHeader) => {
+                return Ok(println!("Input must start with a header."));
+            }
+            Err(HeaderParseError::NegativeNumber(x)) => {
+                return Ok(println!(
+                    "Number({x}) of variables and clauses must not be negative."
+                ));
+            }
+            Err(HeaderParseError::NotANumber(x)) => {
+                return Ok(println!("Input of '{}' is no integer.", x));
+            }
         }
     }
 
