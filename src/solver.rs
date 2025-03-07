@@ -250,7 +250,7 @@ where
 
     fn choice(&self) -> Option<isize> {
         let literals: Vec<isize> = self.clauses[0].iter_literals().collect();
-        literals.choose(&mut rand::rng()).copied().map(Neg::neg)
+        literals.choose(&mut rand::rng()).copied().map(Neg::neg) // NEGATION NECESSARY
     }
 
     fn resolve(&mut self, literal: isize) {
