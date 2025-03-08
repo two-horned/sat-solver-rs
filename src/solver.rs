@@ -4,7 +4,6 @@ use crate::utils::*;
 use core::alloc::{Allocator, Layout};
 use core::iter::{FusedIterator, Iterator};
 use core::mem;
-use core::ops::Neg;
 use rand::seq::IndexedRandom;
 
 impl Solver {
@@ -125,16 +124,14 @@ where
         let blocks = blocks_needed(vrs);
         Self {
             guessed: Clause::new(blocks, a),
-            deduced: Clause::new(blocks, a),
             clauses: Vec::with_capacity_in(cls, b),
             recents: Vec::new(),
         }
     }
 
-    fn new_for_clauses(guessed: Clause<A>, deduced: Clause<A>, clauses: Vec<Clause<A>, B>) -> Self {
+    fn new_for_clauses(guessed: Clause<A>, clauses: Vec<Clause<A>, B>) -> Self {
         Self {
             guessed,
-            deduced,
             clauses,
             recents: Vec::new(),
         }
@@ -162,13 +159,12 @@ where
     }
 
     fn remove_pure_literals(&mut self) {
-        let mut acc = self.deduced.create_sibling();
+        let mut acc = self.guessed.create_sibling();
         self.clauses.iter().for_each(|x| acc.union_in(x));
 
         acc.difference_switched_self();
         if !acc.is_null() {
             self.clauses.retain(|x| acc.disjoint(x));
-            self.deduced.union_in(&acc);
         }
     }
 
@@ -249,8 +245,9 @@ where
     }
 
     fn choice(&self) -> Option<isize> {
-        let literals: Vec<isize> = self.clauses[0].iter_literals().collect();
-        literals.choose(&mut rand::rng()).copied().map(Neg::neg) // NEGATION NECESSARY
+        //let literals: Vec<isize> = self.clauses[0].iter_literals().collect();
+        //literals.choose(&mut rand::rng()).copied()
+        self.clauses[0].iter_literals().next()
     }
 
     fn resolve(&mut self, literal: isize) {
@@ -263,7 +260,12 @@ where
             }
             i += 1;
         }
-        self.consume_recents();
+        if self.recents.len() > self.clauses.len() / 3 {
+            self.recents.clear();
+            self.break_enabled_symmetry();
+        } else {
+            self.consume_recents();
+        }
     }
 
     fn subsumption_ellimination(&mut self) {
@@ -315,7 +317,7 @@ where
 
     fn solve(&mut self) -> bool {
         self.kernelize();
-        if self.clauses.len() == 0 {
+        if self.clauses.is_empty() {
             return true;
         }
         if self.clauses.len() == 1 {
@@ -325,22 +327,21 @@ where
         let comps = {
             let mut tmp = Vec::new_in(*Vec::allocator(&self.clauses));
             mem::swap(&mut tmp, &mut self.clauses);
-            Components::new(self.guessed.clone(), self.deduced.clone(), tmp)
+            Components::new(self.guessed.clone(), tmp)
         };
 
         for mut comp in comps {
+            let choice = comp.choice().unwrap();
             let copy = comp.clone();
-            comp.resolve(comp.choice().unwrap());
+            comp.resolve(choice);
             if comp.solve() {
                 self.guessed.union_in(&comp.guessed);
-                self.deduced.union_in(&comp.deduced);
                 continue;
             }
             comp = copy;
-            comp.resolve(comp.choice().unwrap());
+            comp.resolve(-choice);
             if comp.solve() {
                 self.guessed.union_in(&comp.guessed);
-                self.deduced.union_in(&comp.deduced);
                 continue;
             }
             return false;
@@ -356,7 +357,6 @@ where
         x.unset(literal);
 
         buf.iter_mut().for_each(|y| {
-            assert!(y.read(-literal));
             y.unset(-literal);
             y.union_in(&x)
         });
@@ -429,7 +429,6 @@ where
     B: Allocator + Copy,
 {
     guessed: Clause<A>,
-    deduced: Clause<A>,
     clauses: Vec<Clause<A>, B>,
     recents: Vec<usize>,
 }
@@ -486,11 +485,7 @@ where
         }
 
         v.sort_by_key(Clause::len);
-        return Some(Problem::new_for_clauses(
-            self.guessed.clone(),
-            self.deduced.clone(),
-            v,
-        ));
+        return Some(Problem::new_for_clauses(self.guessed.clone(), v));
     }
 }
 
@@ -499,16 +494,8 @@ where
     A: Allocator + Copy,
     B: Allocator + Copy,
 {
-    fn new<'a>(
-        guessed: Clause<A>,
-        deduced: Clause<A>,
-        clauses: Vec<Clause<A>, B>,
-    ) -> Components<A, B> {
-        Components {
-            guessed,
-            deduced,
-            clauses,
-        }
+    fn new<'a>(guessed: Clause<A>, clauses: Vec<Clause<A>, B>) -> Components<A, B> {
+        Components { guessed, clauses }
     }
 }
 
@@ -518,6 +505,5 @@ where
     B: Allocator + Copy,
 {
     guessed: Clause<A>,
-    deduced: Clause<A>,
     clauses: Vec<Clause<A>, B>,
 }
