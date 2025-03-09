@@ -1,6 +1,7 @@
 use core::alloc::Allocator;
 use core::cell::OnceCell;
 use core::iter::{self, FusedIterator};
+use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, SubAssign};
 use core::usize;
 
 const BLOCK_SIZE: usize = usize::BITS as usize;
@@ -68,11 +69,11 @@ where
     }
 
     pub(crate) fn union_in(&mut self, rhs: &Self) {
-        self.zip_clause_in(rhs, |x, y| *x |= y);
+        self.0 |= &rhs.0;
     }
 
     pub(crate) fn difference_in(&mut self, rhs: &Self) {
-        self.zip_clause_in(rhs, |x, y| *x &= !y);
+        self.0 -= &rhs.0;
     }
 
     pub(crate) fn union_with_joined_in(&mut self, rhs: &Self, rsh: &Self) {
@@ -313,3 +314,29 @@ where
     pub(crate) ones: OnceCell<usize>,
     pub(crate) content: Box<[usize], A>,
 }
+
+impl<A> SubAssign<&BitVec<A>> for BitVec<A>
+where
+    A: Allocator + Copy,
+{
+    fn sub_assign(&mut self, rhs: &BitVec<A>) {
+        self.zip_bits_in(rhs, |x, y| *x &= !y);
+    }
+}
+
+macro_rules! impl_assign_op {
+    ($func:ident, $trait:ident) => {
+        impl<A> $trait<&BitVec<A>> for BitVec<A>
+        where
+            A: Allocator + Copy,
+        {
+            fn $func(&mut self, rhs: &BitVec<A>) {
+                self.zip_bits_in(rhs, $trait::$func);
+            }
+        }
+    };
+}
+
+impl_assign_op!(bitxor_assign, BitXorAssign);
+impl_assign_op!(bitand_assign, BitAndAssign);
+impl_assign_op!(bitor_assign, BitOrAssign);
