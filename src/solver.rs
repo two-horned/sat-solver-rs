@@ -1,4 +1,4 @@
-use crate::alloc::PoolAlloc;
+use crate::alloc::{PoolAlloc, StacklikeAlloc};
 use crate::data::{Clause, blocks_needed, bytes_needed};
 use crate::utils::*;
 use core::alloc::{Allocator, Layout};
@@ -20,9 +20,9 @@ impl Solver {
         };
 
         let vec_alloc = {
-            let bytes = size_of::<Clause<&PoolAlloc>>() * cls_numbr * 2;
+            let bytes = size_of::<Clause<&PoolAlloc>>() * cls_numbr * var_numbr;
             let layout = Layout::from_size_align(bytes, 32).unwrap();
-            Box::into_raw(Box::new(PoolAlloc::new(layout, 100 + max_steps)))
+            Box::into_raw(Box::new(StacklikeAlloc::new(layout)))
         };
 
         let work_onto = Task::Todo(Problem::new(
@@ -106,8 +106,8 @@ pub struct Solver {
     var_numbr: usize,
     cls_numbr: usize,
     cls_alloc: *mut PoolAlloc,
-    vec_alloc: *mut PoolAlloc,
-    work_onto: Task<Problem<&'static PoolAlloc, &'static PoolAlloc>, Solution>,
+    vec_alloc: *mut StacklikeAlloc,
+    work_onto: Task<Problem<&'static PoolAlloc, &'static StacklikeAlloc>, Solution>,
 }
 
 enum Task<A, B> {
@@ -245,9 +245,9 @@ where
     }
 
     fn choice(&self) -> Option<isize> {
-        //let literals: Vec<isize> = self.clauses[0].iter_literals().collect();
-        //literals.choose(&mut rand::rng()).copied()
-        self.clauses[0].iter_literals().next()
+        let literals: Vec<isize> = self.clauses[0].iter_literals().collect();
+        literals.choose(&mut rand::rng()).copied()
+        // self.clauses[0].iter_literals().next()
     }
 
     fn resolve(&mut self, literal: isize) {
@@ -260,12 +260,7 @@ where
             }
             i += 1;
         }
-        if self.recents.len() > self.clauses.len() / 3 {
-            self.recents.clear();
-            self.break_enabled_symmetry();
-        } else {
-            self.consume_recents();
-        }
+        self.consume_recents();
     }
 
     fn subsumption_ellimination(&mut self) {
@@ -349,22 +344,30 @@ where
         true
     }
 
+    fn create_buffer(&self) -> Vec<Clause<A>, B> {
+        Vec::with_capacity_in(self.clauses.len(), *Vec::allocator(&self.clauses))
+    }
+
+    fn extract_first(&mut self, literal: isize) -> Option<Clause<A>> {
+        let k = self.clauses.iter().position(|x| x.read(literal))?;
+        let mut res = self.clauses.remove(k);
+        res.unset(literal);
+        Some(res)
+    }
+
     fn remove_single_occurance(&mut self, literal: isize) {
-        let mut buf = Vec::with_capacity_in(self.clauses.len(), *Vec::allocator(&self.clauses));
+        let mut buf = self.create_buffer();
         self.clauses.extract_in(&mut buf, |x| x.read(-literal));
-        let k = self.clauses.iter().position(|x| x.read(literal)).unwrap();
-        let mut x = self.clauses.remove(k);
-        x.unset(literal);
+        buf.iter_mut().for_each(|y| y.unset(-literal));
 
-        buf.iter_mut().for_each(|y| {
-            y.unset(-literal);
-            y.union_in(&x)
-        });
+        let x = self.extract_first(literal).unwrap();
+        buf.iter_mut().for_each(|y| y.union_in(&x));
 
-        buf.retain(Clause::disjoint_switched_self);
-        buf.retain(|x| self.clauses.iter().find(|y| y.subset_of(&x)).is_none());
-
-        buf.drain(..).for_each(|x| {
+        for x in buf.into_iter().filter(Clause::disjoint_switched_self) {
+            if self.clauses.iter().find(|y| y.subset_of(&x)).is_some() {
+                continue;
+            }
+            assert!(self.recents.is_empty());
             self.clauses
                 .push_within_capacity(x)
                 .unwrap_or_else(|_| panic!("Not enough capacity"));
@@ -372,22 +375,53 @@ where
             self.subsumption_from(k);
             self.recents.push(k);
             self.consume_recents();
-        });
+        }
+    }
+
+    fn remove_double_occurance(&mut self, literal: isize) {
+        let mut buf1 = self.create_buffer();
+        self.clauses.extract_in(&mut buf1, |x| x.read(-literal));
+        buf1.iter_mut().for_each(|y| y.unset(-literal));
+
+        for mut buf in [buf1.clone(), buf1] {
+            let x = if let Some(y) = self.extract_first(literal) {
+                y
+            } else {
+                return;
+            };
+            buf.iter_mut().for_each(|y| y.union_in(&x));
+
+            for x in buf.into_iter().filter(Clause::disjoint_switched_self) {
+                if self.clauses.iter().find(|y| y.subset_of(&x)).is_some() {
+                    continue;
+                }
+                assert!(self.recents.is_empty());
+                self.clauses.push(x);
+                let k = self.combine_from(self.clauses.len() - 1);
+                self.subsumption_from(k);
+                self.recents.push(k);
+                self.consume_recents();
+            }
+        }
     }
 
     fn remove_rarest_literal(&mut self) {
         let mut once = self.guessed.create_sibling();
         let mut twice = self.guessed.create_sibling();
+        let mut thrice = self.guessed.create_sibling();
 
         self.clauses.iter().for_each(|now| {
-            once.union_in(now);
+            thrice.union_with_joined_in(now, &twice);
             twice.union_with_joined_in(now, &once);
+            once.union_in(now);
         });
-
         once.difference_in(&twice);
+        twice.difference_in(&thrice);
 
         if let Some(literal) = once.iter_literals().next() {
             self.remove_single_occurance(literal);
+        } else if let Some(literal) = twice.iter_literals().next() {
+            self.remove_double_occurance(literal);
         }
     }
 }
