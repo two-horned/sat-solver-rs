@@ -1,63 +1,6 @@
 use core::alloc::Allocator;
 use core::cmp::Ordering;
-use core::ptr::{copy, drop_in_place};
-
-impl<T, A: Allocator> BackDrop for Vec<T, A> {
-    type Item = T;
-    unsafe fn back_drop(&mut self, current: usize, consequtives: usize, deleted: usize) {
-        let from = current - consequtives;
-        unsafe {
-            let src = self.as_ptr().add(from);
-            let dst = self.as_mut_ptr().add(from - deleted);
-            copy(src, dst, consequtives);
-        }
-    }
-}
-
-trait BackDrop {
-    type Item;
-    unsafe fn back_drop(&mut self, current: usize, consequtives: usize, deleted: usize);
-}
-
-impl<T, A: Allocator> RetainFrom<T> for Vec<T, A> {
-    fn retain_from<F>(&mut self, f: F, start: usize)
-    where
-        F: Fn(&T) -> bool,
-    {
-        let mut deleted = 0;
-        let mut consequtives = 0;
-        let len = self.len();
-        unsafe {
-            let mut i = start;
-            while i < len && f(&self[i]) {
-                i += 1;
-            }
-            for j in i..len {
-                if f(&self[j]) {
-                    consequtives += 1;
-                } else {
-                    if consequtives != 0 {
-                        self.back_drop(j, consequtives, deleted);
-                        consequtives = 0;
-                    }
-                    drop_in_place(self.as_mut_ptr().add(j));
-                    deleted += 1;
-                }
-            }
-
-            if deleted != 0 && consequtives != 0 {
-                self.back_drop(len, consequtives, deleted);
-            }
-            self.set_len(len - deleted);
-        }
-    }
-}
-
-pub trait RetainFrom<T> {
-    fn retain_from<F>(&mut self, f: F, start: usize)
-    where
-        F: Fn(&T) -> bool;
-}
+use core::ptr::copy;
 
 impl<T> ExpSearchInsert<T> for [T] {
     type Item = T;

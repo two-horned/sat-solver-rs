@@ -154,7 +154,9 @@ where
 
     fn subsumption_from(&mut self, k: usize) {
         let c = self.clauses[k].clone();
-        self.clauses.retain_from(|x| !c.subset_of(x), k + 1);
+        self.clauses
+            .extract_if(k + 1.., |x| c.subset_of(x))
+            .for_each(drop);
     }
 
     fn remove_pure_literals(&mut self) {
@@ -220,7 +222,8 @@ where
     fn update_recents(&mut self, cause: usize) {
         if let Some(i) = self.recents.iter().position(|&x| x >= cause) {
             self.recents
-                .retain_from(|&x| !self.clauses[cause].subset_of(&self.clauses[x]), i);
+                .extract_if(i.., |x| self.clauses[cause].subset_of(&self.clauses[*x]))
+                .for_each(drop);
 
             let (mut a, mut r) = (0, cause + 1);
 
