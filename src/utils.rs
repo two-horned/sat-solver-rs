@@ -19,46 +19,6 @@ trait BackDrop {
     unsafe fn back_drop(&mut self, current: usize, consequtives: usize, deleted: usize);
 }
 
-impl<T, A: Allocator> ExtractIn<T> for Vec<T, A> {
-    fn extract_in<F>(&mut self, other: &mut Self, f: F)
-    where
-        F: Fn(&T) -> bool,
-    {
-        let mut deleted = 0;
-        let mut consequtives = 0;
-        let len = self.len();
-        unsafe {
-            let mut i = 0;
-            while i < len && !f(&self[i]) {
-                i += 1;
-            }
-            for j in i..len {
-                if !f(&self[j]) {
-                    consequtives += 1;
-                } else {
-                    if consequtives != 0 {
-                        self.back_drop(j, consequtives, deleted);
-                        consequtives = 0;
-                    }
-                    let cpy = self.as_ptr().add(j).read();
-                    other.push(cpy);
-                    deleted += 1;
-                }
-            }
-            if deleted != 0 && consequtives != 0 {
-                self.back_drop(len, consequtives, deleted);
-            }
-            self.set_len(len - deleted);
-        }
-    }
-}
-
-pub trait ExtractIn<T> {
-    fn extract_in<F>(&mut self, other: &mut Self, f: F)
-    where
-        F: Fn(&T) -> bool;
-}
-
 impl<T, A: Allocator> RetainFrom<T> for Vec<T, A> {
     fn retain_from<F>(&mut self, f: F, start: usize)
     where

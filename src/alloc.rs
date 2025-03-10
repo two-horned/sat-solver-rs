@@ -6,19 +6,17 @@ use std::sync::Mutex;
 
 impl PoolAlloc {
     pub(crate) fn new(layout: Layout, capacity: usize) -> Self {
-        let objalg = layout.align();
         let (memlyt, objsiz) = layout.repeat(capacity).unwrap();
         let memory = unsafe { alloc(memlyt) };
-        let frptrs = Mutex::new(
-            (0..capacity)
-                .map(|x| unsafe { memory.add(x * objsiz) })
-                .collect(),
-        );
 
         Self {
             objsiz,
-            objalg,
-            frptrs,
+            objalg: layout.align(),
+            frptrs: Mutex::new(
+                (0..capacity)
+                    .map(|x| unsafe { memory.add(x * objsiz) })
+                    .collect(),
+            ),
             memlyt,
             memory,
         }
@@ -88,7 +86,7 @@ unsafe impl Allocator for StacklikeAlloc {
 
         let mut contrl = self.contrl.lock().unwrap();
         let mask = layout.align() - 1;
-        let start = (contrl.offset + mask) & !mask;
+        let start = contrl.offset + mask & !mask;
         let end = start + layout.size();
 
         if end > self.memlyt.size() {
@@ -96,10 +94,8 @@ unsafe impl Allocator for StacklikeAlloc {
         }
 
         let ptr = ptr::from_raw_parts_mut(unsafe { self.memory.add(start) }, layout.size());
-        {
-            let offset = contrl.offset;
-            contrl.alptrs.push(offset);
-        }
+        let offset = contrl.offset;
+        contrl.alptrs.push(offset);
         contrl.offset = end;
         Ok(unsafe { NonNull::new_unchecked(ptr) })
     }
@@ -107,10 +103,8 @@ unsafe impl Allocator for StacklikeAlloc {
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
         let mut contrl = self.contrl.lock().unwrap();
 
-        {
-            let offset = unsafe { ptr.as_ptr().offset_from_unsigned(self.memory) + layout.size() };
-            contrl.frptrs.push(offset);
-        }
+        let offset = unsafe { ptr.as_ptr().offset_from_unsigned(self.memory) + layout.size() };
+        contrl.frptrs.push(offset);
 
         while let Some(&x) = contrl.frptrs.peek() {
             assert!(x <= contrl.offset);

@@ -4,7 +4,6 @@ use crate::utils::*;
 use core::alloc::{Allocator, Layout};
 use core::iter::{FusedIterator, Iterator};
 use core::mem;
-use rand::seq::IndexedRandom;
 
 impl Solver {
     pub fn new(var_numbr: usize, cls_numbr: usize) -> Self {
@@ -20,7 +19,7 @@ impl Solver {
         };
 
         let vec_alloc = {
-            let bytes = size_of::<Clause<&PoolAlloc>>() * cls_numbr * var_numbr;
+            let bytes = size_of::<Clause<&PoolAlloc>>() * cls_numbr * var_numbr * 2;
             let layout = Layout::from_size_align(bytes, 32).unwrap();
             Box::into_raw(Box::new(StacklikeAlloc::new(layout)))
         };
@@ -155,7 +154,7 @@ where
 
     fn subsumption_from(&mut self, k: usize) {
         let c = self.clauses[k].clone();
-        self.clauses.retain_from(|x| !c.subset_of(x), k + 1)
+        self.clauses.retain_from(|x| !c.subset_of(x), k + 1);
     }
 
     fn remove_pure_literals(&mut self) {
@@ -244,10 +243,16 @@ where
         res
     }
 
-    fn choice(&self) -> Option<isize> {
-        let literals: Vec<isize> = self.clauses[0].iter_literals().collect();
-        literals.choose(&mut rand::rng()).copied()
-        // self.clauses[0].iter_literals().next()
+    fn choice(&mut self) -> Option<isize> {
+        let res = self.clauses[0]
+            .iter_literals()
+            .flat_map(|i| [i, -i])
+            .map(|i| (i, self.clauses.iter().filter(|x| x.read(i)).count()))
+            .max_by_key(|(_, j)| *j);
+        if let Some((i, 2)) = res {
+            self.remove_double_occurance(i);
+        }
+        res.map(|(i, _)| i)
     }
 
     fn resolve(&mut self, literal: isize) {
@@ -344,10 +349,6 @@ where
         true
     }
 
-    fn create_buffer(&self) -> Vec<Clause<A>, B> {
-        Vec::with_capacity_in(self.clauses.len(), *Vec::allocator(&self.clauses))
-    }
-
     fn extract_first(&mut self, literal: isize) -> Option<Clause<A>> {
         let k = self.clauses.iter().position(|x| x.read(literal))?;
         let mut res = self.clauses.remove(k);
@@ -356,8 +357,7 @@ where
     }
 
     fn remove_single_occurance(&mut self, literal: isize) {
-        let mut buf = self.create_buffer();
-        self.clauses.extract_in(&mut buf, |x| x.read(-literal));
+        let mut buf: Vec<_> = self.clauses.extract_if(.., |x| x.read(-literal)).collect();
         buf.iter_mut().for_each(|y| y.unset(-literal));
 
         let x = self.extract_first(literal).unwrap();
@@ -379,8 +379,8 @@ where
     }
 
     fn remove_double_occurance(&mut self, literal: isize) {
-        let mut buf1 = self.create_buffer();
-        self.clauses.extract_in(&mut buf1, |x| x.read(-literal));
+        let mut buf1: Vec<_> = self.clauses.extract_if(.., |x| x.read(-literal)).collect();
+        buf1.extend(self.clauses.extract_if(.., |x| x.read(-literal)));
         buf1.iter_mut().for_each(|y| y.unset(-literal));
 
         for mut buf in [buf1.clone(), buf1] {
@@ -408,21 +408,22 @@ where
     fn remove_rarest_literal(&mut self) {
         let mut once = self.guessed.create_sibling();
         let mut twice = self.guessed.create_sibling();
-        let mut thrice = self.guessed.create_sibling();
+        // let mut thrice = self.guessed.create_sibling();
 
         self.clauses.iter().for_each(|now| {
-            thrice.union_with_joined_in(now, &twice);
+            // thrice.union_with_joined_in(now, &twice);
             twice.union_with_joined_in(now, &once);
             once.union_in(now);
         });
         once.difference_in(&twice);
-        twice.difference_in(&thrice);
+        // twice.difference_in(&thrice);
 
         if let Some(literal) = once.iter_literals().next() {
             self.remove_single_occurance(literal);
-        } else if let Some(literal) = twice.iter_literals().next() {
-            self.remove_double_occurance(literal);
         }
+        // else if let Some(literal) = twice.iter_literals().next() {
+        //     self.remove_double_occurance(literal);
+        // }
     }
 }
 
@@ -510,7 +511,8 @@ where
         v.push_within_capacity(x)
             .unwrap_or_else(|_| panic!("Not enough capacity"));
         loop {
-            self.clauses.extract_in(&mut e, |x| x.has_variables(&r));
+            e.extend(self.clauses.extract_if(.., |x| x.has_variables(&r)));
+
             if e.is_empty() {
                 break;
             }
