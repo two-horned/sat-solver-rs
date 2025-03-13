@@ -2,3 +2,12 @@
 name = "sat-solver"
 version = "0.1.0"
 edition = "2024"
+
+[profile.dev]
+opt-level = 2
+debug = false
+strip = true
+overflow-checks = false
+lto = true
+panic = "abort"
+incremental = false
