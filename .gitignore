@@ -1,3 +1,5 @@
 /target
 perf.*
 *.svg
+cachegrind.out.*
+rust-ice-*
