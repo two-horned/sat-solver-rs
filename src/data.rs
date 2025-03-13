@@ -1,7 +1,7 @@
 use core::alloc::Allocator;
 use core::cell::OnceCell;
 use core::iter::{self, FusedIterator};
-use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, SubAssign};
+use core::ops::{BitAndAssign,  BitOrAssign, BitXorAssign, SubAssign};
 use core::usize;
 
 const BLOCK_SIZE: usize = usize::BITS as usize;
@@ -59,13 +59,6 @@ where
             res.0.content[j] = self.0.content[i];
         });
         res
-    }
-
-    fn zip_clause_in<F>(&mut self, rhs: &Self, f: F)
-    where
-        F: Fn(&mut usize, usize) -> (),
-    {
-        BitVec::zip_bits_in(&mut self.0, &rhs.0, f);
     }
 
     pub(crate) fn union_in(&mut self, rhs: &Self) {

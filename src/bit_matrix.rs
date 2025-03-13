@@ -172,6 +172,51 @@ impl<A: Allocator> BitMatrix<A> {
         }
     }
 
+    pub(crate) fn swap_remove_row(&mut self, row: usize) {
+        assert!(row <= self.row_count);
+        self.row_count -= 1;
+        if let Some(ptr) = self.rc_memory {
+            unsafe {
+                let n = integers_needed(self.col_capac);
+                ptr.add(n * self.row_count).copy_to(ptr.add(n * row), n);
+
+                let ptr = ptr.add(self.integers_needed_rows());
+                let n = integers_needed(self.row_capac);
+
+                let (a, b) = indices(row);
+                let (x, y) = indices(self.row_count);
+                for i in 0..self.col_count {
+                    let tow = ptr.add(i * n + a).as_mut();
+                    let tor = ptr.add(i * n + x).as_mut();
+                    tow.write(b, tor.read(y));
+                }
+            }
+        }
+    }
+
+    pub(crate) fn swap_remove_col(&mut self, col: usize) {
+        assert!(col <= self.col_count);
+        self.col_count -= 1;
+        if let Some(ptr) = self.rc_memory {
+            unsafe {
+                {
+                    let ptr = ptr.add(self.integers_needed_rows());
+                    let n = integers_needed(self.row_capac);
+                    ptr.add(n * self.col_count).copy_to(ptr.add(n * col), n);
+                }
+
+                let n = integers_needed(self.col_capac);
+                let (a, b) = indices(col);
+                let (x, y) = indices(self.col_count);
+                for i in 0..self.row_count {
+                    let tow = ptr.add(i * n + a).as_mut();
+                    let tor = ptr.add(i * n + x).as_mut();
+                    tow.write(b, tor.read(y));
+                }
+            }
+        }
+    }
+
     const fn integers_needed(&self) -> usize {
         self.integers_needed_rows() + self.integers_needed_cols()
     }
