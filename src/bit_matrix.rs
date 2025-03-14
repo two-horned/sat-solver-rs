@@ -51,8 +51,10 @@ impl<A: Allocator> BitMatrix<A> {
         let mut tmp = Self::new_in(a);
         tmp.row_capac = row_capac;
         tmp.col_capac = col_capac;
-        tmp.rc_memory = Some(tmp.allocate());
 
+        if row_capac + col_capac != 0 {
+            tmp.rc_memory = Some(tmp.allocate());
+        }
         tmp
     }
 
@@ -178,17 +180,19 @@ impl<A: Allocator> BitMatrix<A> {
         if let Some(ptr) = self.rc_memory {
             unsafe {
                 let n = integers_needed(self.col_capac);
-                ptr.add(n * self.row_count).copy_to(ptr.add(n * row), n);
+                let [s, d] = [self.row_count, row].map(|k| k * n);
+                ptr.add(s).copy_to(ptr.add(d), n);
+                ptr.add(s).write_bytes(0, size_of::<usize>() * n);
 
                 let ptr = ptr.add(self.integers_needed_rows());
                 let n = integers_needed(self.row_capac);
-
                 let (a, b) = indices(row);
                 let (x, y) = indices(self.row_count);
                 for i in 0..self.col_count {
-                    let tow = ptr.add(i * n + a).as_mut();
-                    let tor = ptr.add(i * n + x).as_mut();
-                    tow.write(b, tor.read(y));
+                    let [s, d] = [x, a].map(|k| k + i * n);
+                    let value = ptr.add(s).as_ref().read(y);
+                    ptr.add(d).as_mut().write(b, value);
+                    ptr.add(s).as_mut().unset(y);
                 }
             }
         }
@@ -202,16 +206,19 @@ impl<A: Allocator> BitMatrix<A> {
                 {
                     let ptr = ptr.add(self.integers_needed_rows());
                     let n = integers_needed(self.row_capac);
-                    ptr.add(n * self.col_count).copy_to(ptr.add(n * col), n);
+                    let [s, d] = [self.col_count, col].map(|k| k * n);
+                    ptr.add(s).copy_to(ptr.add(d), n);
+                    ptr.add(s).write_bytes(0, size_of::<usize>() * n);
                 }
 
                 let n = integers_needed(self.col_capac);
                 let (a, b) = indices(col);
                 let (x, y) = indices(self.col_count);
                 for i in 0..self.row_count {
-                    let tow = ptr.add(i * n + a).as_mut();
-                    let tor = ptr.add(i * n + x).as_mut();
-                    tow.write(b, tor.read(y));
+                    let [s, d] = [x, a].map(|k| k + i * n);
+                    let value = ptr.add(s).as_ref().read(y);
+                    ptr.add(d).as_mut().write(b, value);
+                    ptr.add(s).as_mut().unset(y);
                 }
             }
         }
@@ -242,6 +249,38 @@ impl<A: Allocator> BitMatrix<A> {
             .allocate_zeroed(layout)
             .expect("Allocation failed.")
             .cast()
+    }
+}
+
+impl<A: Allocator + Clone> Clone for BitMatrix<A> {
+    fn clone(&self) -> Self {
+        let allocator = self.allocator.clone();
+        let mut res = Self::with_capacity_in(self.row_count, self.col_count, allocator);
+
+        if let Some(dst) = res.rc_memory {
+            let src = self.rc_memory.unwrap();
+
+            unsafe {
+                let src_needed = integers_needed(self.col_capac);
+                let dst_needed = integers_needed(res.col_capac);
+                for r in 0..self.row_count {
+                    src.add(r * src_needed)
+                        .copy_to(dst.add(r * dst_needed), dst_needed);
+                }
+
+                let src = src.add(self.integers_needed_rows());
+                let dst = dst.add(res.integers_needed_rows());
+                let src_needed = integers_needed(self.row_capac);
+                let dst_needed = integers_needed(res.row_capac);
+                for c in 0..self.row_count {
+                    src.add(c * src_needed)
+                        .copy_to(dst.add(c * dst_needed), dst_needed);
+                }
+            }
+        }
+        res.row_count = self.row_count;
+        res.col_count = self.col_count;
+        res
     }
 }
 
