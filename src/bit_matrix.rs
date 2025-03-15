@@ -95,25 +95,27 @@ impl<A: Allocator> BitMatrix<A> {
     impl_mut_row_col_access!(unset);
     impl_mut_row_col_access!(flip);
 
-    pub(crate) fn row_data(&self, row: usize) -> Option<&[usize]> {
+    pub(crate) fn row_data(&self, row: usize) -> &[usize] {
+        assert!(row < self.row_count);
         if let Some(ptr) = self.rc_memory {
             unsafe {
-                let n = self.integers_needed_each_row();
-                return Some(NonNull::slice_from_raw_parts(ptr.add(row * n), n).as_ref());
+                let n = self.integers_used_each_row();
+                return NonNull::slice_from_raw_parts(ptr.add(row * n), n).as_ref();
             }
         }
-        None
+        &[]
     }
 
-    pub(crate) fn col_data(&self, col: usize) -> Option<&[usize]> {
+    pub(crate) fn col_data(&self, col: usize) -> &[usize] {
+        assert!(col < self.col_count);
         if let Some(ptr) = self.rc_memory {
             unsafe {
-                let n = self.integers_needed_each_col();
+                let n = self.integers_used_each_col();
                 let s = self.integers_needed_rows();
-                return Some(NonNull::slice_from_raw_parts(ptr.add(s + col * n), n).as_ref());
+                return NonNull::slice_from_raw_parts(ptr.add(s + col * n), n).as_ref();
             }
         }
-        None
+        &[]
     }
 
     pub(crate) fn push_empty_row(&mut self) {
@@ -263,6 +265,14 @@ impl<A: Allocator> BitMatrix<A> {
 
     const fn integers_needed_each_col(&self) -> usize {
         integers_needed(self.row_capac)
+    }
+
+    const fn integers_used_each_row(&self) -> usize {
+        integers_needed(self.col_count)
+    }
+
+    const fn integers_used_each_col(&self) -> usize {
+        integers_needed(self.row_count)
     }
 
     fn layout(&self) -> Layout {
