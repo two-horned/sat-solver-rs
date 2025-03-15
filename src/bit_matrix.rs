@@ -20,14 +20,14 @@ macro_rules! impl_mut_row_col_access {
             assert!(col < self.col_count, "Col is out of bound.");
 
             let (mut i, j) = indices(col);
-            i += row * integers_needed(self.col_capac);
+            i += row * self.integers_needed_each_row();
 
             let num = unsafe { self.rc_memory.unwrap().add(i).as_mut() };
             num.$func_name(j);
 
             let s = self.integers_needed_rows();
             let (mut i, j) = indices(row);
-            i += s + col * integers_needed(self.row_capac);
+            i += s + col * self.integers_needed_each_col();
 
             let num = unsafe { self.rc_memory.unwrap().add(i).as_mut() };
             num.$func_name(j);
@@ -63,7 +63,7 @@ impl<A: Allocator> BitMatrix<A> {
         assert!(col < self.col_count, "Col is out of bound.");
 
         let (mut i, j) = indices(col);
-        i += row * integers_needed(self.col_capac);
+        i += row * self.integers_needed_each_row();
 
         let num = *unsafe { self.rc_memory.unwrap().add(i).as_ref() };
         let res = num.read(j);
@@ -77,7 +77,7 @@ impl<A: Allocator> BitMatrix<A> {
 
         let s = self.integers_needed_rows();
         let (mut i, j) = indices(row);
-        i += s + col * integers_needed(self.row_capac);
+        i += s + col * self.integers_needed_each_col();
 
         let num = *unsafe { self.rc_memory.unwrap().add(i).as_ref() };
         num.read(j)
@@ -95,6 +95,27 @@ impl<A: Allocator> BitMatrix<A> {
     impl_mut_row_col_access!(unset);
     impl_mut_row_col_access!(flip);
 
+    pub(crate) fn row_data(&self, row: usize) -> Option<&[usize]> {
+        if let Some(ptr) = self.rc_memory {
+            unsafe {
+                let n = self.integers_needed_each_row();
+                return Some(NonNull::slice_from_raw_parts(ptr.add(row * n), n).as_ref());
+            }
+        }
+        None
+    }
+
+    pub(crate) fn col_data(&self, col: usize) -> Option<&[usize]> {
+        if let Some(ptr) = self.rc_memory {
+            unsafe {
+                let n = self.integers_needed_each_col();
+                let s = self.integers_needed_rows();
+                return Some(NonNull::slice_from_raw_parts(ptr.add(s + col * n), n).as_ref());
+            }
+        }
+        None
+    }
+
     pub(crate) fn push_empty_row(&mut self) {
         self.row_count += 1;
 
@@ -104,12 +125,12 @@ impl<A: Allocator> BitMatrix<A> {
 
         if let Some(old_ptr) = self.rc_memory {
             let old_layout = self.layout();
-            let old_capac = integers_needed(self.row_capac);
+            let old_capac = self.integers_needed_each_col();
             let old_size = self.integers_needed_rows();
 
             self.row_capac = (self.row_capac << 1) + 1;
             let new_ptr = self.allocate();
-            let new_capac = integers_needed(self.row_capac);
+            let new_capac = self.integers_needed_each_col();
             let new_size = self.integers_needed_rows();
 
             unsafe {
@@ -145,13 +166,13 @@ impl<A: Allocator> BitMatrix<A> {
 
         if let Some(old_ptr) = self.rc_memory {
             let old_layout = self.layout();
-            let old_capac = integers_needed(self.col_capac);
+            let old_capac = self.integers_needed_each_row();
             let old_size_r = self.integers_needed_rows();
             let old_size_c = self.integers_needed_cols();
 
             self.col_capac = (self.col_capac << 1) + 1;
             let new_ptr = self.allocate();
-            let new_capac = integers_needed(self.col_capac);
+            let new_capac = self.integers_needed_each_row();
             let new_size_r = self.integers_needed_rows();
             unsafe {
                 old_ptr
@@ -179,13 +200,13 @@ impl<A: Allocator> BitMatrix<A> {
         self.row_count -= 1;
         if let Some(ptr) = self.rc_memory {
             unsafe {
-                let n = integers_needed(self.col_capac);
+                let n = self.integers_needed_each_row();
                 let [s, d] = [self.row_count, row].map(|k| k * n);
                 ptr.add(s).copy_to(ptr.add(d), n);
                 ptr.add(s).write_bytes(0, size_of::<usize>() * n);
 
                 let ptr = ptr.add(self.integers_needed_rows());
-                let n = integers_needed(self.row_capac);
+                let n = self.integers_needed_each_col();
                 let (a, b) = indices(row);
                 let (x, y) = indices(self.row_count);
                 for i in 0..self.col_count {
@@ -205,13 +226,13 @@ impl<A: Allocator> BitMatrix<A> {
             unsafe {
                 {
                     let ptr = ptr.add(self.integers_needed_rows());
-                    let n = integers_needed(self.row_capac);
+                    let n = self.integers_needed_each_col();
                     let [s, d] = [self.col_count, col].map(|k| k * n);
                     ptr.add(s).copy_to(ptr.add(d), n);
                     ptr.add(s).write_bytes(0, size_of::<usize>() * n);
                 }
 
-                let n = integers_needed(self.col_capac);
+                let n = self.integers_needed_each_row();
                 let (a, b) = indices(col);
                 let (x, y) = indices(self.col_count);
                 for i in 0..self.row_count {
@@ -234,6 +255,14 @@ impl<A: Allocator> BitMatrix<A> {
 
     const fn integers_needed_cols(&self) -> usize {
         self.col_capac * integers_needed(self.row_capac)
+    }
+
+    const fn integers_needed_each_row(&self) -> usize {
+        integers_needed(self.col_capac)
+    }
+
+    const fn integers_needed_each_col(&self) -> usize {
+        integers_needed(self.row_capac)
     }
 
     fn layout(&self) -> Layout {
