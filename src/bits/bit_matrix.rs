@@ -1,17 +1,7 @@
-use core::alloc::Allocator;
+use crate::bits::bit_tools::{Bits, indices, integers_needed};
+
+use core::alloc::{Allocator, Layout};
 use core::ptr::NonNull;
-use std::alloc::Layout;
-
-const MASK: usize = usize::BITS as usize - 1;
-const POWR: usize = MASK.trailing_ones() as usize;
-
-const fn indices(index: usize) -> (usize, usize) {
-    (index >> POWR, index & MASK)
-}
-
-const fn integers_needed(bits: usize) -> usize {
-    bits + MASK >> POWR
-}
 
 macro_rules! impl_mut_row_col_access {
     ($func_name:ident) => {
@@ -58,6 +48,26 @@ impl<A: Allocator> BitMatrix<A> {
         tmp
     }
 
+    pub(crate) fn allocator(&self) -> &A {
+        &self.allocator
+    }
+
+    pub(crate) fn rows(&self) -> usize {
+        self.row_count
+    }
+
+    pub(crate) fn cols(&self) -> usize {
+        self.col_count
+    }
+
+    pub(crate) fn row_capacity(&self) -> usize {
+        self.row_capac
+    }
+
+    pub(crate) fn col_capacity(&self) -> usize {
+        self.col_capac
+    }
+
     pub(crate) fn read(&self, row: usize, col: usize) -> bool {
         assert!(row < self.row_count, "Row is out of bound.");
         assert!(col < self.col_count, "Col is out of bound.");
@@ -99,8 +109,9 @@ impl<A: Allocator> BitMatrix<A> {
         assert!(row < self.row_count);
         if let Some(ptr) = self.rc_memory {
             unsafe {
-                let n = self.integers_used_each_row();
-                return NonNull::slice_from_raw_parts(ptr.add(row * n), n).as_ref();
+                let n = self.integers_needed_each_row();
+                let u = self.integers_used_each_row();
+                return NonNull::slice_from_raw_parts(ptr.add(row * n), u).as_ref();
             }
         }
         &[]
@@ -110,9 +121,10 @@ impl<A: Allocator> BitMatrix<A> {
         assert!(col < self.col_count);
         if let Some(ptr) = self.rc_memory {
             unsafe {
-                let n = self.integers_used_each_col();
+                let n = self.integers_needed_each_col();
+                let u = self.integers_used_each_col();
                 let s = self.integers_needed_rows();
-                return NonNull::slice_from_raw_parts(ptr.add(s + col * n), n).as_ref();
+                return NonNull::slice_from_raw_parts(ptr.add(s + col * n), u).as_ref();
             }
         }
         &[]
@@ -121,7 +133,7 @@ impl<A: Allocator> BitMatrix<A> {
     pub(crate) fn push_empty_row(&mut self) {
         self.row_count += 1;
 
-        if self.row_count <= self.row_capac - (self.row_capac >> 2) {
+        if self.row_count <= self.row_capac {
             return;
         }
 
@@ -162,7 +174,7 @@ impl<A: Allocator> BitMatrix<A> {
     pub(crate) fn push_empty_col(&mut self) {
         self.col_count += 1;
 
-        if self.col_count <= self.col_capac - (self.col_capac >> 2) {
+        if self.col_count <= self.col_capac {
             return;
         }
 
@@ -252,26 +264,26 @@ impl<A: Allocator> BitMatrix<A> {
     }
 
     const fn integers_needed_rows(&self) -> usize {
-        self.row_capac * integers_needed(self.col_capac)
+        self.row_capac * self.integers_needed_each_row()
     }
 
     const fn integers_needed_cols(&self) -> usize {
-        self.col_capac * integers_needed(self.row_capac)
+        self.col_capac * self.integers_needed_each_col()
     }
 
-    const fn integers_needed_each_row(&self) -> usize {
+    pub(crate) const fn integers_needed_each_row(&self) -> usize {
         integers_needed(self.col_capac)
     }
 
-    const fn integers_needed_each_col(&self) -> usize {
+    pub(crate) const fn integers_needed_each_col(&self) -> usize {
         integers_needed(self.row_capac)
     }
 
-    const fn integers_used_each_row(&self) -> usize {
+    pub(crate) const fn integers_used_each_row(&self) -> usize {
         integers_needed(self.col_count)
     }
 
-    const fn integers_used_each_col(&self) -> usize {
+    pub(crate) const fn integers_used_each_col(&self) -> usize {
         integers_needed(self.row_count)
     }
 
@@ -370,39 +382,3 @@ pub(crate) struct BitMatrix<A: Allocator> {
     col_capac: usize,
     rc_memory: Option<NonNull<usize>>,
 }
-
-macro_rules! impl_bit_manipulation {
-    ($integer:ty) => {
-        impl Bits for $integer {
-            fn read(&self, i: usize) -> bool {
-                self >> i & 1 != 0
-            }
-            fn write(&mut self, i: usize, value: bool) {
-                if value {
-                    self.set(i);
-                } else {
-                    self.unset(i);
-                }
-            }
-            fn set(&mut self, i: usize) {
-                *self |= 1 << i;
-            }
-            fn unset(&mut self, i: usize) {
-                *self &= !(1 << i);
-            }
-            fn flip(&mut self, i: usize) {
-                *self ^= 1 << i;
-            }
-        }
-    };
-}
-
-trait Bits {
-    fn read(&self, i: usize) -> bool;
-    fn write(&mut self, i: usize, value: bool);
-    fn set(&mut self, i: usize);
-    fn unset(&mut self, i: usize);
-    fn flip(&mut self, i: usize);
-}
-
-impl_bit_manipulation!(usize);
