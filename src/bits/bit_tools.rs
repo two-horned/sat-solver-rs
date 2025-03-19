@@ -14,6 +14,30 @@ pub(crate) const fn integers_needed(bits: usize) -> usize {
 
 macro_rules! impl_bit_manipulation {
     ($integer:ty) => {
+        impl Bits for [$integer] {
+            fn read(&self, i: usize) -> bool {
+                let (i, j) = indices(i);
+                self[i].read(j)
+            }
+            fn write(&mut self, i: usize, value: bool) {
+                let (i, j) = indices(i);
+                self[i].write(j, value);
+            }
+
+            fn set(&mut self, i: usize) {
+                let (i, j) = indices(i);
+                self[i].set(j);
+            }
+            fn unset(&mut self, i: usize) {
+                let (i, j) = indices(i);
+                self[i].unset(j);
+            }
+            fn flip(&mut self, i: usize) {
+                let (i, j) = indices(i);
+                self[i].flip(j);
+            }
+        }
+
         impl Bits for $integer {
             fn read(&self, i: usize) -> bool {
                 self >> i & 1 != 0
@@ -48,53 +72,54 @@ pub(crate) trait Bits {
 
 impl_bit_manipulation!(usize);
 
-macro_rules! uint_iter_ones {
-    (
-        $uint:ty,
-        $IterOnes:ident
-        ) => {
-        impl DoubleEndedIterator for $IterOnes {
-            fn next_back(&mut self) -> Option<Self::Item> {
-                if self.0 == 0 {
-                    return None;
-                }
-                let res = self.0.leading_zeros() as usize;
-                self.0 ^= 1 << res;
-                Some(res)
-            }
-        }
+// macro_rules! uint_iter_ones {
+//     (
+//         $uint:ty,
+//         $IterOnes:ident
+//         ) => {
+//         impl DoubleEndedIterator for $IterOnes {
+//             fn next_back(&mut self) -> Option<Self::Item> {
+//                 if self.0 == 0 {
+//                     return None;
+//                 }
+//                 let res = self.0.leading_zeros() as usize;
+//                 self.0 ^= 1 << res;
+//                 Some(res)
+//             }
+//         }
 
-        impl ExactSizeIterator for $IterOnes {
-            fn len(&self) -> usize {
-                self.0.count_ones() as usize
-            }
-        }
+//         impl ExactSizeIterator for $IterOnes {
+//             fn len(&self) -> usize {
+//                 self.0.count_ones() as usize
+//             }
+//         }
 
-        impl FusedIterator for $IterOnes {}
+//         impl FusedIterator for $IterOnes {}
 
-        impl Iterator for $IterOnes {
-            type Item = usize;
+//         impl Iterator for $IterOnes {
+//             type Item = usize;
 
-            pub(crate) fn next(&mut self) -> Option<Self::Item> {
-                if self.0 == 0 {
-                    return None;
-                }
+//             pub(crate) fn next(&mut self) -> Option<Self::Item> {
+//                 if self.0 == 0 {
+//                     return None;
+//                 }
 
-                let res = self.0.trailing_zeros() as usize;
-                self.0 &= self.0 - 1;
-                Some(res)
-            }
-        }
+//                 let res = self.0.trailing_zeros() as usize;
+//                 self.0 &= self.0 - 1;
+//                 Some(res)
+//             }
+//         }
 
-        pub(crate) struct $IterOnes($uint);
-    };
-}
+//         pub(crate) struct $IterOnes($uint);
+//     };
+// }
 
 macro_rules! uint_slice_iter_ones {
     (
         $uint:ty,
         $IterOnesSlice:ident
     ) => {
+
         impl $IterOnesSlice<'_> {
             pub(crate) const fn new<'a>(slice: &'a [$uint]) -> $IterOnesSlice<'a> {
                 $IterOnesSlice(0, 0, slice)
@@ -138,3 +163,45 @@ macro_rules! uint_slice_iter_ones {
 }
 
 uint_slice_iter_ones!(usize, IterOnesSliceUsize);
+
+macro_rules! uint_iterator_iter_ones {
+    (
+        $uint:ty,
+        $IterOnesIterator:ident
+    ) => {
+        impl<I: Iterator<Item = $uint>> $IterOnesIterator<I> {
+            pub(crate) const fn new(iterator: I) -> $IterOnesIterator<I> {
+                $IterOnesIterator(0, 0, iterator)
+            }
+        }
+
+        impl<I> FusedIterator for $IterOnesIterator<I> where
+            I: Iterator<Item = $uint> + FusedIterator
+        {
+        }
+
+        impl<I: Iterator<Item = $uint>> Iterator for $IterOnesIterator<I> {
+            type Item = usize;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                if self.0 == 0 {
+                    let x = self.2.next()?;
+                    self.0 = x;
+                    self.1 += BITS;
+                }
+
+                let res = self.0.trailing_zeros() as usize + self.1;
+                self.0 &= self.0 - 1;
+                Some(res)
+            }
+        }
+
+        pub(crate) struct $IterOnesIterator<I: Iterator<Item = $uint>>($uint, $uint, I);
+    };
+}
+
+uint_iterator_iter_ones!(usize, IterOnesIteratorUsize);
+
+pub(crate) const fn iter_ones_slice_usize(slice: &[usize]) -> IterOnesSliceUsize {
+    IterOnesSliceUsize::new(slice)
+}

@@ -48,23 +48,23 @@ impl<A: Allocator> BitMatrix<A> {
         tmp
     }
 
-    pub(crate) fn allocator(&self) -> &A {
+    pub(crate) const fn allocator(&self) -> &A {
         &self.allocator
     }
 
-    pub(crate) fn rows(&self) -> usize {
+    pub(crate) const fn rows(&self) -> usize {
         self.row_count
     }
 
-    pub(crate) fn cols(&self) -> usize {
+    pub(crate) const fn cols(&self) -> usize {
         self.col_count
     }
 
-    pub(crate) fn row_capacity(&self) -> usize {
+    pub(crate) const fn row_capacity(&self) -> usize {
         self.row_capac
     }
 
-    pub(crate) fn col_capacity(&self) -> usize {
+    pub(crate) const fn col_capacity(&self) -> usize {
         self.col_capac
     }
 
