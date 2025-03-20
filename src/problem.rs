@@ -74,6 +74,7 @@ impl<A: Allocator + Copy> Problem<A> {
 
     /// Remove (and resolve) pure literals.
     fn remove_pure_literals(&mut self) {
+        println!("Remove pures?");
         let mut i = 0;
         while i < self.0.cols() {
             let pos_data = self.0.col_data(i);
@@ -85,16 +86,22 @@ impl<A: Allocator + Copy> Problem<A> {
                 i += 2;
             }
         }
+        println!("Removed pures!");
     }
 
     /// Shrink clause *i*, s.t. ∀j : Cⱼ ∖ Cᵢ = {l} ⇒ (-l) ∉ Cᵢ.
     fn shrink_clause(&mut self, clause: usize) {
-        let row_count = self.0.rows();
+        let (row_count, col_count) = (self.0.rows(), self.0.cols());
         assert!(clause <= row_count);
 
         let (used_each_col, last_col, mask_col) = {
             let (i, j) = indices(row_count - 1);
             (i + 1, i, usize::MAX >> (BITS - j - 1))
+        };
+
+        let (last_row, mask_row) = {
+            let (i, j) = indices(col_count - 1);
+            (i, usize::MAX >> (BITS - j - 1))
         };
 
         let mut tmp_row = self.buffer();
@@ -103,20 +110,26 @@ impl<A: Allocator + Copy> Problem<A> {
         loop {
             let row = self.0.row_data(clause);
             tmp_row.extend(row.iter().map(|x| !x));
+            tmp_row[last_row] &= mask_row;
             let mut literal_to_delete = None;
 
             for l in iter_ones_slice_usize(row) {
+                println!("Row {clause} and literal {l}");
+                println!("Matrix data being {:?}", self.0);
                 tmp_row.flip(l ^ 1);
                 tmp_row.flip(l);
 
                 tmp_col.extend(repeat_n(0, used_each_col));
 
+                println!("Removed stuff?");
                 for t in iter_ones_slice_usize(&tmp_row) {
+                    println!("T is {t}.");
                     tmp_col
                         .iter_mut()
                         .zip(self.0.col_data(t))
                         .for_each(|(x, y)| *x |= y);
                 }
+                println!("Removed stuff!");
 
                 tmp_col.iter_mut().for_each(|x| *x = !*x);
                 tmp_col[last_col] &= mask_col;

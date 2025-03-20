@@ -151,7 +151,7 @@ macro_rules! uint_slice_iter_ones {
                     self.2 = &self.2[1..];
                 }
 
-                let res = self.0.trailing_zeros() as usize + self.1;
+                let res = self.0.trailing_zeros() as usize + self.1 - BITS;
                 self.0 &= self.0 - 1;
                 Some(res)
             }
@@ -183,13 +183,12 @@ macro_rules! uint_iterator_iter_ones {
             type Item = usize;
 
             fn next(&mut self) -> Option<Self::Item> {
-                if self.0 == 0 {
-                    let x = self.2.next()?;
-                    self.0 = x;
+                while self.0 == 0 {
+                    self.0 = self.2.next()?;
                     self.1 += BITS;
                 }
 
-                let res = self.0.trailing_zeros() as usize + self.1;
+                let res = self.0.trailing_zeros() as usize + self.1 - BITS;
                 self.0 &= self.0 - 1;
                 Some(res)
             }
