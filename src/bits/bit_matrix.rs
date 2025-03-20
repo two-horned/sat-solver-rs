@@ -8,8 +8,6 @@ macro_rules! impl_mut_row_col_access {
         pub(crate) fn $func_name(&mut self, row: usize, col: usize) {
             assert!(row < self.row_count, "Row is out of bound.");
             assert!(col < self.col_count, "Col is out of bound.");
-            debug_assert!(self.is_consistent(), "Data is inconsistent before this func.");
-
             let (mut i, j) = indices(col);
             i += row * self.integers_needed_each_row();
 
@@ -22,7 +20,10 @@ macro_rules! impl_mut_row_col_access {
 
             let num = unsafe { self.rc_memory.unwrap().add(i).as_mut() };
             num.$func_name(j);
-            debug_assert!(self.is_consistent(), "Data is inconsistent after this func.");
+            debug_assert!(
+                self.is_consistent(),
+                "Data is inconsistent after this func."
+            );
         }
     };
 }
@@ -106,7 +107,6 @@ impl<A: Allocator> BitMatrix<A> {
     }
 
     pub(crate) fn write(&mut self, row: usize, col: usize, value: bool) {
-        debug_assert!(self.is_consistent(), "Data is inconsistent before write.");
         if value {
             self.set(row, col);
         } else {
@@ -145,7 +145,6 @@ impl<A: Allocator> BitMatrix<A> {
     }
 
     pub(crate) fn push_empty_row(&mut self) {
-        debug_assert!(self.is_consistent(), "Data is inconsistent before pushing empty row.");
         self.row_count += 1;
 
         if self.row_count <= self.row_capac {
@@ -184,11 +183,13 @@ impl<A: Allocator> BitMatrix<A> {
             }
             self.rc_memory = Some(self.allocate());
         }
-        debug_assert!(self.is_consistent(), "Data is inconsistent after pushing empty row.");
+        debug_assert!(
+            self.is_consistent(),
+            "Data is inconsistent after pushing empty row."
+        );
     }
 
     pub(crate) fn push_empty_col(&mut self) {
-        debug_assert!(self.is_consistent(), "Data is inconsistent before pushing empty col.");
         self.col_count += 1;
 
         if self.col_count <= self.col_capac {
@@ -224,19 +225,21 @@ impl<A: Allocator> BitMatrix<A> {
                 self.rc_memory = Some(self.allocate());
             }
         }
-        debug_assert!(self.is_consistent(), "Data is inconsistent after pushing empty col.");
+        debug_assert!(
+            self.is_consistent(),
+            "Data is inconsistent after pushing empty col."
+        );
     }
 
     pub(crate) fn swap_remove_row(&mut self, row: usize) {
         assert!(row <= self.row_count);
-        debug_assert!(self.is_consistent(), "Data is inconsistent before swap removing row.");
         self.row_count -= 1;
         if let Some(ptr) = self.rc_memory {
             unsafe {
                 let n = self.integers_needed_each_row();
                 let [s, d] = [self.row_count, row].map(|k| k * n);
                 ptr.add(s).copy_to(ptr.add(d), n);
-                ptr.add(s).write_bytes(0, size_of::<usize>() * n);
+                ptr.add(s).write_bytes(0, n);
 
                 let ptr = ptr.add(self.integers_needed_rows());
                 let n = self.integers_needed_each_col();
@@ -250,12 +253,14 @@ impl<A: Allocator> BitMatrix<A> {
                 }
             }
         }
-        debug_assert!(self.is_consistent(), "Data is inconsistent after swap removing row.");
+        debug_assert!(
+            self.is_consistent(),
+            "Data is inconsistent after swap removing row."
+        );
     }
 
     pub(crate) fn swap_remove_col(&mut self, col: usize) {
         assert!(col <= self.col_count);
-        debug_assert!(self.is_consistent(), "Data is inconsistent before swap removing col.");
         self.col_count -= 1;
         if let Some(ptr) = self.rc_memory {
             unsafe {
@@ -264,7 +269,7 @@ impl<A: Allocator> BitMatrix<A> {
                     let n = self.integers_needed_each_col();
                     let [s, d] = [self.col_count, col].map(|k| k * n);
                     ptr.add(s).copy_to(ptr.add(d), n);
-                    ptr.add(s).write_bytes(0, size_of::<usize>() * n);
+                    ptr.add(s).write_bytes(0, n);
                 }
 
                 let n = self.integers_needed_each_row();
@@ -278,7 +283,10 @@ impl<A: Allocator> BitMatrix<A> {
                 }
             }
         }
-        debug_assert!(self.is_consistent(), "Data is inconsistent after swap removing col.");
+        debug_assert!(
+            self.is_consistent(),
+            "Data is inconsistent after swap removing col."
+        );
     }
 
     const fn integers_needed(&self) -> usize {
@@ -327,7 +335,6 @@ impl<A: Allocator> BitMatrix<A> {
 
 impl<A: Allocator + Clone> Clone for BitMatrix<A> {
     fn clone(&self) -> Self {
-        debug_assert!(self.is_consistent(), "Data is inconsistent before cloning.");
         let allocator = self.allocator.clone();
         let mut res = Self::with_capacity_in(self.row_count, self.col_count, allocator);
 
