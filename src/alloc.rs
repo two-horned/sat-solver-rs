@@ -4,60 +4,6 @@ use std::alloc::{alloc, dealloc};
 use std::collections::BinaryHeap;
 use std::sync::Mutex;
 
-impl PoolAlloc {
-    pub(crate) fn new(layout: Layout, capacity: usize) -> Self {
-        let (memlyt, objsiz) = layout.repeat(capacity).unwrap();
-        let memory = unsafe { alloc(memlyt) };
-
-        Self {
-            objsiz,
-            objalg: layout.align(),
-            frptrs: Mutex::new(
-                (0..capacity)
-                    .map(|x| unsafe { memory.add(x * objsiz) })
-                    .collect(),
-            ),
-            memlyt,
-            memory,
-        }
-    }
-}
-
-unsafe impl Sync for PoolAlloc {}
-
-impl Drop for PoolAlloc {
-    fn drop(&mut self) {
-        unsafe { dealloc(self.memory, self.memlyt) }
-    }
-}
-
-pub(crate) struct PoolAlloc {
-    objsiz: usize,
-    objalg: usize,
-    frptrs: Mutex<Vec<*mut u8>>,
-    memlyt: Layout,
-    memory: *mut u8,
-}
-
-unsafe impl Allocator for PoolAlloc {
-    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        if layout.align() > self.objalg || layout.size() > self.objsiz {
-            return Err(AllocError);
-        }
-        let mut frptrs = self.frptrs.lock().unwrap();
-        if let Some(start) = frptrs.pop() {
-            let ptr = ptr::from_raw_parts_mut(start, layout.size());
-            return Ok(unsafe { NonNull::new_unchecked(ptr) });
-        }
-        Err(AllocError)
-    }
-
-    unsafe fn deallocate(&self, ptr: NonNull<u8>, _: Layout) {
-        let mut frptrs = self.frptrs.lock().unwrap();
-        frptrs.push(ptr.as_ptr());
-    }
-}
-
 impl StacklikeAlloc {
     pub(crate) fn new(layout: Layout) -> Self {
         let memlyt = layout.pad_to_align();

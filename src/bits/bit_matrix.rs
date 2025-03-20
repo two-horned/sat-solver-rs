@@ -287,7 +287,7 @@ impl<A: Allocator> BitMatrix<A> {
         integers_needed(self.row_count)
     }
 
-    fn layout(&self) -> Layout {
+    pub(crate) fn layout(&self) -> Layout {
         let (layout, _) = Layout::new::<usize>()
             .repeat(self.integers_needed())
             .expect("Arithmetic overflow on layout creation.");

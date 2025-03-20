@@ -7,6 +7,6 @@
 )]
 
 pub mod alloc;
-pub mod data;
+pub mod bits;
+pub mod problem;
 pub mod solver;
-pub mod utils;

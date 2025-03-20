@@ -119,7 +119,6 @@ macro_rules! uint_slice_iter_ones {
         $uint:ty,
         $IterOnesSlice:ident
     ) => {
-
         impl $IterOnesSlice<'_> {
             pub(crate) const fn new<'a>(slice: &'a [$uint]) -> $IterOnesSlice<'a> {
                 $IterOnesSlice(0, 0, slice)
@@ -143,7 +142,7 @@ macro_rules! uint_slice_iter_ones {
             type Item = usize;
 
             fn next(&mut self) -> Option<Self::Item> {
-                if self.0 == 0 {
+                while self.0 == 0 {
                     if self.2.is_empty() {
                         return None;
                     }

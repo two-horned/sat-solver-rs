@@ -1,12 +1,24 @@
 use crate::bits::bit_matrix::BitMatrix;
 use crate::bits::bit_tools::{BITS, Bits, indices, iter_ones_slice_usize};
 
-use core::alloc::Allocator;
+use core::alloc::{Allocator, Layout};
 use core::iter::{repeat_n, zip};
 
 impl<A: Allocator + Copy> Problem<A> {
     pub(crate) fn new_in(a: A) -> Self {
         Self(BitMatrix::new_in(a))
+    }
+
+    pub(crate) fn with_capacity_in(clauses: usize, variables: usize, a: A) -> Self {
+        Self(BitMatrix::with_capacity_in(clauses, variables, a))
+    }
+
+    pub(crate) fn layout(&self) -> Layout {
+        self.0.layout()
+    }
+
+    pub(crate) const fn clauses(&self) -> usize {
+        self.0.rows()
     }
 
     pub(crate) fn add_clause<I>(&mut self, literals: I)
@@ -18,6 +30,11 @@ impl<A: Allocator + Copy> Problem<A> {
         for l in literals {
             let i = (l.abs() as usize) << 1;
             let j = l.is_negative() as usize;
+
+            let k = i + 1 - 2;
+            while k >= self.0.cols() {
+                self.0.push_empty_col(); // Quick'n'dirty
+            }
             self.0.set(row, i + j - 2);
         }
     }
@@ -55,6 +72,7 @@ impl<A: Allocator + Copy> Problem<A> {
         w.into_iter().rev().for_each(|i| self.del_clause(i));
     }
 
+    /// Remove (and resolve) pure literals.
     fn remove_pure_literals(&mut self) {
         let mut i = 0;
         while i < self.0.cols() {
@@ -123,7 +141,7 @@ impl<A: Allocator + Copy> Problem<A> {
         }
     }
 
-    fn handle_shrinked(&mut self, mut shrinked: Vec<usize>) {
+    fn handle_shrinked<B: Allocator>(&mut self, mut shrinked: Vec<usize, B>) {
         let row_count = self.0.rows();
         assert!(shrinked.iter().all(|&i| i < row_count));
 
@@ -201,6 +219,7 @@ impl<A: Allocator + Copy> Problem<A> {
         }
     }
 
+    /// Returns the literals with highest occurance.
     fn choose(&self) -> Option<usize> {
         let mut max = None;
         for i in 0..self.0.cols() {
@@ -215,18 +234,18 @@ impl<A: Allocator + Copy> Problem<A> {
         max.map(|x| x.0)
     }
 
+    /// Resolve a literal and restore invariants afterwards.
     fn resolve(&mut self, literal: usize) {
         let mut tmp = self.buffer();
 
-        tmp.extend(self.0.col_data(literal ^ 1));
-        for i in iter_ones_slice_usize(&tmp) {
-            self.0.flip(i, literal ^ 1);
-        }
-
+        tmp.extend(iter_ones_slice_usize(self.0.col_data(literal)));
+        tmp.iter().rev().for_each(|&i| self.del_clause(i));
         tmp.clear();
 
-        tmp.extend(iter_ones_slice_usize(self.0.col_data(literal)));
-        tmp.into_iter().rev().for_each(|i| self.del_clause(i));
+        tmp.extend(self.0.col_data(literal ^ 1));
+        tmp.iter().for_each(|&i| self.0.flip(i, literal ^ 1));
+
+        self.handle_shrinked(tmp);
     }
 
     fn kernelize(&mut self) {
@@ -239,17 +258,26 @@ impl<A: Allocator + Copy> Problem<A> {
         }
     }
 
+    /// Establishes invariances.
     pub(crate) fn prepare(&mut self) {
         self.remove_tautologies();
+        let mut tmp = self.buffer();
+        tmp.extend(0..self.0.rows());
+        self.handle_shrinked(tmp);
     }
 
     pub(crate) fn solve(&mut self) -> bool {
+        if self.0.rows() == 1 {
+            if self.0.row_data(0).iter().all(|&x| x == 0) {
+                return false;
+            } else {
+                return true;
+            }
+        }
+
         self.kernelize();
         if self.0.rows() == 0 {
             return true;
-        }
-        if self.0.rows() == 1 {
-            return false;
         }
 
         let mut cpy = self.clone();
