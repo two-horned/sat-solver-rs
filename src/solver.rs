@@ -13,7 +13,7 @@ impl Solver {
         let allocator = {
             let integers_needed =
                 cls_numbr * integers_needed(var_numbr) * integers_needed(var_numbr);
-            let layout = Layout::from_size_align(integers_needed * var_numbr * 2, 4096).unwrap();
+            let layout = Layout::from_size_align(integers_needed * var_numbr * var_numbr, 4096).unwrap();
             Box::into_raw(Box::new(StacklikeAlloc::new(layout)))
         };
 
@@ -68,7 +68,7 @@ impl Solver {
                     return Err(SolverError::TooFewClauses);
                 }
                 x.prepare();
-                let solution = if x.solve() {
+                let solution = if x.clone().solve() {
                     // let mut tmp: Vec<_> = x.guessed.iter_literals().collect();
                     // tmp.sort_by_key(|x| x.abs());
                     Solution::Satisfiable(vec![])

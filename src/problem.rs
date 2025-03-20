@@ -1,8 +1,31 @@
 use crate::bits::bit_matrix::BitMatrix;
 use crate::bits::bit_tools::{BITS, Bits, indices, iter_ones_slice_usize};
 
-use core::alloc::{Allocator, Layout};
-use core::iter::{repeat_n, zip};
+use core::alloc::Allocator;
+use core::iter::{Map, Zip, repeat_n, zip};
+use core::ops::{BitAnd, BitAndAssign, BitOrAssign};
+
+fn zip_with<I, J, F, T, S, R>(
+    lhs: I,
+    rhs: J,
+    f: F,
+) -> Map<Zip<<I as IntoIterator>::IntoIter, <J as IntoIterator>::IntoIter>, impl (FnMut((T, S)) -> R)>
+where
+    I: IntoIterator<Item = T>,
+    J: IntoIterator<Item = S>,
+    F: Fn(T, S) -> R,
+{
+    zip(lhs, rhs).map(move |(x, y)| f(x, y))
+}
+
+fn zip_for_each<I, J, F, T, S>(lhs: I, rhs: J, f: F)
+where
+    I: IntoIterator<Item = T>,
+    J: IntoIterator<Item = S>,
+    F: Fn(T, S) -> (),
+{
+    zip(lhs, rhs).for_each(|(x, y)| f(x, y));
+}
 
 impl<A: Allocator + Copy> Problem<A> {
     pub(crate) fn new_in(a: A) -> Self {
@@ -13,12 +36,16 @@ impl<A: Allocator + Copy> Problem<A> {
         Self(BitMatrix::with_capacity_in(clauses, variables << 1, a))
     }
 
-    pub(crate) fn layout(&self) -> Layout {
-        self.0.layout()
-    }
-
     pub(crate) const fn clauses(&self) -> usize {
         self.0.rows()
+    }
+
+    pub(crate) const fn literals(&self) -> usize {
+        self.0.cols()
+    }
+
+    pub(crate) const fn variables(&self) -> usize {
+        self.literals() >> 1
     }
 
     pub(crate) fn add_clause<I>(&mut self, literals: I)
@@ -48,51 +75,60 @@ impl<A: Allocator + Copy> Problem<A> {
     }
 
     const fn buffer<T>(&self) -> Vec<T, A> {
-        Vec::new_in(*self.0.allocator())
+        Vec::new_in(*self.allocator())
     }
 
-    fn buffer_with_capacity<T>(&self, capacity: usize) -> Vec<T, A> {
-        Vec::with_capacity_in(capacity, *self.0.allocator())
-    }
-
-    /// Remove all clauses, s.t. ∀i,j : lᵢ ∈ Cⱼ ⇒ (lⱼ) ∉ Cⱼ.
+    /// Remove all clauses, s.t. ∀i,j : lᵢ ∈ Cⱼ ⇒ (lᵢ) ∉ Cⱼ.
     fn remove_tautologies(&mut self) {
         let mut to_delete = self.buffer();
         to_delete.extend(repeat_n(0, self.0.integers_used_each_col()));
 
-        for i in (0..self.0.cols()).step_by(2) {
-            to_delete
-                .iter_mut()
-                .zip(zip(self.0.col_data(i), self.0.col_data(i + 1)).map(|(x, y)| x & y))
-                .for_each(|(x, y)| *x |= y);
+        for i in (0..self.literals()).step_by(2) {
+            zip_for_each(
+                to_delete.iter_mut(),
+                zip_with(self.0.col_data(i), self.0.col_data(i + 1), BitAnd::bitand),
+                BitOrAssign::bitor_assign,
+            );
         }
 
-        let mut w = self.buffer();
-        w.extend(iter_ones_slice_usize(&to_delete));
-        w.into_iter().rev().for_each(|i| self.del_clause(i));
+        let mut tmp = self.buffer();
+        tmp.extend(iter_ones_slice_usize(&to_delete));
+        tmp.into_iter().rev().for_each(|i| self.del_clause(i));
     }
 
     /// Remove (and resolve) pure literals.
     fn remove_pure_literals(&mut self) {
-        println!("Remove pures?");
+        let mut tmp = self.buffer();
+
         let mut i = 0;
-        while i < self.0.cols() {
+        while i < self.literals() {
             let pos_data = self.0.col_data(i);
             let neg_data = self.0.col_data(i + 1);
-            if pos_data.iter().all(|&x| x == 0) || neg_data.iter().all(|&x| x == 0) {
+            if pos_data.iter().all(|&x| x == 0) {
+                tmp.extend(iter_ones_slice_usize(neg_data));
+                tmp.iter().rev().for_each(|&i| self.del_clause(i));
                 self.0.swap_remove_col(i + 1);
                 self.0.swap_remove_col(i);
+                tmp.clear();
+            } else if neg_data.iter().all(|&x| x == 0) {
+                tmp.extend(iter_ones_slice_usize(pos_data));
+                tmp.iter().rev().for_each(|&i| self.del_clause(i));
+                self.0.swap_remove_col(i + 1);
+                self.0.swap_remove_col(i);
+                tmp.clear();
             } else {
                 i += 2;
             }
         }
-        println!("Removed pures!");
     }
 
     /// Shrink clause *i*, s.t. ∀j : Cⱼ ∖ Cᵢ = {l} ⇒ (-l) ∉ Cᵢ.
     fn shrink_clause(&mut self, clause: usize) {
         let (row_count, col_count) = (self.0.rows(), self.0.cols());
         assert!(clause <= row_count);
+        if col_count == 0 {
+            return;
+        }
 
         let (used_each_col, last_col, mask_col) = {
             let (i, j) = indices(row_count - 1);
@@ -114,22 +150,18 @@ impl<A: Allocator + Copy> Problem<A> {
             let mut literal_to_delete = None;
 
             for l in iter_ones_slice_usize(row) {
-                println!("Row {clause} and literal {l}");
-                println!("Matrix data being {:?}", self.0);
                 tmp_row.flip(l ^ 1);
                 tmp_row.flip(l);
 
                 tmp_col.extend(repeat_n(0, used_each_col));
 
-                println!("Removed stuff?");
                 for t in iter_ones_slice_usize(&tmp_row) {
-                    println!("T is {t}.");
-                    tmp_col
-                        .iter_mut()
-                        .zip(self.0.col_data(t))
-                        .for_each(|(x, y)| *x |= y);
+                    zip_for_each(
+                        tmp_col.iter_mut(),
+                        self.0.col_data(t),
+                        BitOrAssign::bitor_assign,
+                    );
                 }
-                println!("Removed stuff!");
 
                 tmp_col.iter_mut().for_each(|x| *x = !*x);
                 tmp_col[last_col] &= mask_col;
@@ -183,16 +215,14 @@ impl<A: Allocator + Copy> Problem<A> {
                 tmp_col[last_col] &= mask_col;
 
                 for i in iter_ones_slice_usize(row) {
-                    tmp_col
-                        .iter_mut()
-                        .zip(self.0.col_data(i))
-                        .for_each(|(x, y)| *x &= y);
+                    zip_for_each(
+                        tmp_col.iter_mut(),
+                        self.0.col_data(i),
+                        BitAndAssign::bitand_assign,
+                    );
                 }
                 tmp_col.flip(x);
-                to_delete
-                    .iter_mut()
-                    .zip(&tmp_col)
-                    .for_each(|(x, y)| *x |= y);
+                zip_for_each(to_delete.iter_mut(), &tmp_col, BitOrAssign::bitor_assign);
                 tmp_col.clear();
             }
 
@@ -210,10 +240,11 @@ impl<A: Allocator + Copy> Problem<A> {
                         tmp_col[last_col] &= mask_col;
 
                         for i in iter_ones_slice_usize(&cpy_row) {
-                            tmp_col
-                                .iter_mut()
-                                .zip(self.0.col_data(i))
-                                .for_each(|(x, y)| *x &= y);
+                            zip_for_each(
+                                tmp_col.iter_mut(),
+                                self.0.col_data(i),
+                                BitAndAssign::bitand_assign,
+                            );
                         }
                         tmp_col.flip(x);
                         for i in iter_ones_slice_usize(&tmp_col) {
@@ -255,8 +286,14 @@ impl<A: Allocator + Copy> Problem<A> {
         tmp.iter().rev().for_each(|&i| self.del_clause(i));
         tmp.clear();
 
-        tmp.extend(self.0.col_data(literal ^ 1));
+        tmp.extend(iter_ones_slice_usize(self.0.col_data(literal ^ 1)));
         tmp.iter().for_each(|&i| self.0.flip(i, literal ^ 1));
+
+        let mut cols = [literal ^ 1, literal];
+        cols.sort();
+        cols.into_iter()
+            .rev()
+            .for_each(|i| self.0.swap_remove_col(i));
 
         self.handle_shrinked(tmp);
     }
@@ -279,7 +316,7 @@ impl<A: Allocator + Copy> Problem<A> {
         self.handle_shrinked(tmp);
     }
 
-    pub(crate) fn solve(&mut self) -> bool {
+    pub(crate) fn solve(mut self) -> bool {
         if self.0.rows() == 1 {
             if self.0.row_data(0).iter().all(|&x| x == 0) {
                 return false;
@@ -295,7 +332,12 @@ impl<A: Allocator + Copy> Problem<A> {
 
         let mut cpy = self.clone();
 
-        let choice = self.choose().expect("Should have some variables left.");
+        let choice = {
+            match self.choose() {
+                Some(x) => x,
+                _ => return false,
+            }
+        };
 
         self.resolve(choice);
         if self.solve() {
