@@ -237,9 +237,10 @@ impl<A: Allocator> BitMatrix<A> {
         if let Some(ptr) = self.rc_memory {
             unsafe {
                 let n = self.integers_needed_each_row();
+                let u = self.integers_used_each_row();
                 let [s, d] = [self.row_count, row].map(|k| k * n);
-                ptr.add(s).copy_to(ptr.add(d), n);
-                ptr.add(s).write_bytes(0, n);
+                ptr.add(s).copy_to(ptr.add(d), u);
+                ptr.add(s).write_bytes(0, u);
 
                 let ptr = ptr.add(self.integers_needed_rows());
                 let n = self.integers_needed_each_col();
@@ -267,9 +268,10 @@ impl<A: Allocator> BitMatrix<A> {
                 {
                     let ptr = ptr.add(self.integers_needed_rows());
                     let n = self.integers_needed_each_col();
+                    let u = self.integers_used_each_col();
                     let [s, d] = [self.col_count, col].map(|k| k * n);
-                    ptr.add(s).copy_to(ptr.add(d), n);
-                    ptr.add(s).write_bytes(0, n);
+                    ptr.add(s).copy_to(ptr.add(d), u);
+                    ptr.add(s).write_bytes(0, u);
                 }
 
                 let n = self.integers_needed_each_row();
