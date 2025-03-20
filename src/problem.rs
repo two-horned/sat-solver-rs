@@ -10,7 +10,7 @@ impl<A: Allocator + Copy> Problem<A> {
     }
 
     pub(crate) fn with_capacity_in(clauses: usize, variables: usize, a: A) -> Self {
-        Self(BitMatrix::with_capacity_in(clauses, variables, a))
+        Self(BitMatrix::with_capacity_in(clauses, variables << 1, a))
     }
 
     pub(crate) fn layout(&self) -> Layout {
